@@ -3,15 +3,13 @@ import pandas as pd
 import gspread
 import os
 import hashlib
-import json  # 追加
+import json
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
 # --- 設定 ---
-# BASE_DIRの設定は残しますが、クラウド上では動的にファイルを生成します
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# ファイルパスの設定（一時的な保存先として /tmp やカレントディレクトリを使う）
+# ファイルパスの設定
 CREDENTIALS_PATH = 'google_credentials.json' 
 TOKEN_PATH = 'gspread_token.json'
 
@@ -26,27 +24,28 @@ SCOPES = [
 
 st.set_page_config(page_title="通知設定マネージャー", layout="wide")
 
-# --- 【追加】Secretsからファイルを生成する関数 ---
+# --- Secretsからファイルを生成する関数 (JSONエラー対策済み) ---
 def create_json_from_secrets():
-    # 内部関数: どんなに深い階層でも標準の辞書(dict)に変換する
+    # 内部関数: AttrDict等を再帰的に標準の辞書(dict)に変換
     def recursive_dict(d):
         if hasattr(d, 'items'):
             return {k: recursive_dict(v) for k, v in d.items()}
         return d
 
-    # Streamlit CloudのSecretsに設定がある場合、ファイルを作成する
-    if "google_credentials" in st.secrets:
-        with open(CREDENTIALS_PATH, "w") as f:
-            # 再帰的に辞書に変換してからJSON化
-            creds_dict = recursive_dict(st.secrets["google_credentials"])
-            f.write(json.dumps(creds_dict))
-    
-    if "gspread_token" in st.secrets:
-        with open(TOKEN_PATH, "w") as f:
-            token_dict = recursive_dict(st.secrets["gspread_token"])
-            f.write(json.dumps(token_dict))
+    try:
+        if "google_credentials" in st.secrets:
+            with open(CREDENTIALS_PATH, "w") as f:
+                creds_dict = recursive_dict(st.secrets["google_credentials"])
+                f.write(json.dumps(creds_dict))
+        
+        if "gspread_token" in st.secrets:
+            with open(TOKEN_PATH, "w") as f:
+                token_dict = recursive_dict(st.secrets["gspread_token"])
+                f.write(json.dumps(token_dict))
+    except Exception as e:
+        st.error(f"Secrets読み込みエラー: {e}")
 
-# 起動時に一度だけ実行してファイルを作る
+# 起動時に実行
 create_json_from_secrets()
 
 # --- 関数: 認証ロジック (Google API) ---
@@ -72,9 +71,11 @@ def get_gspread_client():
             creds = None
 
     if not os.path.exists(CREDENTIALS_PATH):
-        st.error(f"認証ファイルが見つかりません: {CREDENTIALS_PATH}")
+        # ローカル実行時のフォールバック用メッセージ（Cloudでは出ないはず）
+        st.error(f"認証ファイルが見つかりません。Secretsの設定を確認してください。")
         return None
 
+    # 以下は初回認証フロー（Cloud上では使われませんが念のため残します）
     if 'auth_flow' not in st.session_state:
         flow = Flow.from_client_secrets_file(
             CREDENTIALS_PATH,
@@ -89,12 +90,9 @@ def get_gspread_client():
         auth_url, _ = flow.authorization_url(prompt='consent')
         st.session_state['auth_url'] = auth_url
 
-    st.warning("⚠️ 初回認証が必要です")
-    st.markdown(f"""
-    1. **[👉 ここをクリックしてGoogle認証を行う]({st.session_state['auth_url']})**
-    2. エラー画面のURL (`http://localhost:8080/?code=...`) をコピーしてください。
-    """)
-    auth_response_url = st.text_input("コピーしたURLをここに貼り付け:", key="auth_url_input")
+    st.warning("⚠️ 初回認証が必要です（ローカル環境用）")
+    st.markdown(f"**[👉 認証URL]({st.session_state['auth_url']})**")
+    auth_response_url = st.text_input("URL貼り付け:", key="auth_url_input")
 
     if st.button("認証完了"):
         if auth_response_url:
@@ -104,25 +102,17 @@ def get_gspread_client():
                 creds = flow.credentials
                 with open(TOKEN_PATH, 'w') as token:
                     token.write(creds.to_json())
-                
-                if 'auth_flow' in st.session_state: del st.session_state['auth_flow']
-                if 'auth_url' in st.session_state: del st.session_state['auth_url']
-                
-                st.success("✅ 認証成功！リロードします...")
+                st.success("認証成功")
                 st.rerun()
             except Exception as e:
                 st.error(f"認証エラー: {e}")
-        else:
-            st.error("URLを入力してください")
     return None
 
 # --- 関数: ユーザー認証システム ---
 def hash_password(password):
-    """パスワードをハッシュ化する"""
     return hashlib.sha256(str(password).encode('utf-8')).hexdigest()
 
 def ensure_users_sheet(client):
-    """ユーザー管理シートが存在するか確認し、なければ作成する"""
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
         try:
@@ -134,7 +124,6 @@ def ensure_users_sheet(client):
         st.error(f"ユーザーDB初期化エラー: {e}")
 
 def get_users_df(client):
-    """ユーザー認証情報を取得"""
     ensure_users_sheet(client)
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
@@ -147,7 +136,6 @@ def get_users_df(client):
         return pd.DataFrame(columns=['ユーザーID', 'ユーザー名', 'パスワードハッシュ'])
 
 def register_user(client, user_id, user_name, password):
-    """新規ユーザー登録"""
     users_df = get_users_df(client)
     if str(user_id) in users_df['ユーザーID'].values:
         return False, "このユーザーIDは既に登録されています。"
@@ -163,14 +151,11 @@ def register_user(client, user_id, user_name, password):
         return False, f"登録エラー: {e}"
 
 def login_user(client, login_input, password):
-    """ログイン認証 (ID または ユーザー名)"""
     users_df = get_users_df(client)
-    
     user_row = users_df[
         (users_df['ユーザーID'] == str(login_input)) | 
         (users_df['ユーザー名'] == str(login_input))
     ]
-    
     if user_row.empty:
         return False, "ユーザーが見つかりません。", "", ""
     
@@ -187,7 +172,6 @@ def load_data(client):
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(TARGET_SHEET_NAME)
         data = sheet.get_all_values()
-        
         expected_cols = ['ユーザーID', 'サイト', 'カテゴリ', 'ブランドキーワード']
 
         if not data:
@@ -200,13 +184,12 @@ def load_data(client):
         for col in expected_cols:
             if col not in df.columns:
                 df[col] = ""
-                
         return df
     except Exception as e:
         st.error(f"データ読み込みエラー: {e}")
         return None
 
-# --- 関数: データのマージと保存 ---
+# --- 関数: データのマージと保存 (修正版) ---
 def save_merged_data(client, full_df, edited_display_df, user_id):
     try:
         new_rows = []
@@ -231,7 +214,6 @@ def save_merged_data(client, full_df, edited_display_df, user_id):
         else:
             save_user_df = pd.DataFrame(columns=['ユーザーID', 'サイト', 'カテゴリ', 'ブランドキーワード'])
 
-        # 他のユーザーのデータを保持
         other_users_df = full_df[full_df['ユーザーID'] != str(user_id)]
         
         cols = ['ユーザーID', 'サイト', 'カテゴリ', 'ブランドキーワード']
@@ -243,31 +225,30 @@ def save_merged_data(client, full_df, edited_display_df, user_id):
         save_user_df = save_user_df.reindex(columns=cols)
         other_users_df = other_users_df.reindex(columns=cols)
         
-        # 結合
         final_df = pd.concat([other_users_df, save_user_df], ignore_index=True)
         
-        # 保存
+        # --- スプレッドシート更新処理 (gspread v6対応) ---
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(TARGET_SHEET_NAME)
         update_data = [final_df.columns.tolist()] + final_df.astype(str).values.tolist()
         
         sheet.clear()
-        sheet.update(update_data)
+        # valuesキーワード引数を使用し、開始位置A1を指定して書き込む
+        sheet.update(values=update_data, range_name='A1')
+        
         st.success("✅ 設定を保存しました！")
         return final_df
     except Exception as e:
-        st.error(f"保存エラー: {e}")
+        st.error(f"保存中にエラーが発生しました: {e}")
         return None
 
 # --- メイン画面 ---
 def main():
     st.title("🔔 自動通知 ユーザー設定管理")
     
-    # 1. Google接続
     client = get_gspread_client()
     if not client:
         return
 
-    # 2. ログイン状態管理
     if 'logged_in_user_id' not in st.session_state:
         st.session_state['logged_in_user_id'] = None
         st.session_state['logged_in_user_name'] = None
@@ -296,7 +277,6 @@ def main():
         with tab2:
             st.subheader("新規登録")
             st.info("DiscordのユーザーIDと、表示用のユーザー名を設定してください。")
-            
             r_id = st.text_input("DiscordユーザーID (必須)", key="reg_id")
             r_name = st.text_input("ユーザー名 (表示用)", key="reg_name")
             r_pass = st.text_input("パスワード", type="password", key="reg_pass")
@@ -314,10 +294,9 @@ def main():
                             st.error(msg)
                 else:
                     st.warning("全ての項目を入力してください")
-        
         st.stop()
 
-    # --- ログイン後画面 (設定編集) ---
+    # --- ログイン後画面 ---
     current_user_id = st.session_state['logged_in_user_id']
     current_user_name = st.session_state['logged_in_user_name']
     
@@ -329,11 +308,11 @@ def main():
             st.session_state['logged_in_user_name'] = None
             st.rerun()
 
-    # 3. データ読み込み
     full_df = load_data(client)
     if full_df is None:
         return
 
+    # 選択肢の生成
     if not full_df.empty:
         valid_pairs_df = full_df[['サイト', 'カテゴリ']].drop_duplicates()
         valid_pairs_df = valid_pairs_df[
@@ -353,17 +332,13 @@ def main():
     else:
         user_df['検索条件'] = []
 
-    # --- 画面表示用データ作成 ---
     display_df = user_df[['検索条件', 'ブランドキーワード']].copy()
-    display_df.index = range(1, len(display_df) + 1) # 連番No.設定
+    display_df.index = range(1, len(display_df) + 1)
 
     st.markdown(f"### {current_user_name} さんの通知設定")
 
     column_config = {
-        "_index": st.column_config.NumberColumn(
-            "No.",
-            disabled=True,
-        ),
+        "_index": st.column_config.NumberColumn("No.", disabled=True),
         "検索条件": st.column_config.SelectboxColumn(
             "検索条件 (サイト - カテゴリ)",
             options=valid_options,
@@ -387,16 +362,12 @@ def main():
     col1, col2 = st.columns([1, 4])
     with col1:
         if st.button("💾 変更を保存", type="primary"):
-            # --- 【追加】重複チェック ---
-            # 有効なデータ（空欄ではないもの）のみ抽出して重複確認
+            # 重複チェック
             valid_entries = edited_display_df[edited_display_df['検索条件'].notna() & (edited_display_df['検索条件'] != "")]
-            
             if valid_entries['検索条件'].duplicated().any():
-                # 重複している項目を取得
                 duplicates = valid_entries[valid_entries['検索条件'].duplicated()]['検索条件'].unique()
-                st.error(f"⚠️ エラー: 以下のカテゴリが重複しています。1つにまとめてください。\n\n" + ", ".join(duplicates))
+                st.error(f"⚠️ エラー: 以下のカテゴリが重複しています。\n\n" + ", ".join(duplicates))
             else:
-                # 重複がなければ保存実行
                 new_full_df = save_merged_data(client, full_df, edited_display_df, current_user_id)
                 if new_full_df is not None:
                     st.session_state.df = new_full_df
