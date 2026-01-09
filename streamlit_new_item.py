@@ -13,9 +13,11 @@ CREDENTIALS_PATH = 'google_credentials.json'
 TOKEN_PATH = 'gspread_token.json'
 
 SPREADSHEET_ID = "1Y8VEVn95FOp5ELLtBiuUrB9m4S3qDSiX50G6aB88vnk"
-TARGET_SHEET_NAME = "ユーザー設定"
-USERS_SHEET_NAME = "ユーザー管理"
-CHOICES_SHEET_NAME = "選択肢マスタ" # 【追加】選択肢を管理するシート名
+
+# シート名の設定
+TARGET_SHEET_NAME = "ユーザー設定"  # ユーザーごとの設定保存先
+USERS_SHEET_NAME = "ユーザー管理"   # ログイン情報の管理
+CHOICES_SHEET_NAME = "管理"        # 【変更】選択肢マスタ（サイト・カテゴリ定義）
 
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets',
@@ -132,14 +134,15 @@ def login_user(client, login_input, password):
     else:
         return False, "パスワードが間違っています。", "", ""
 
-# --- 【新規】選択肢マスタの管理 ---
+# --- 【変更】「管理」シートから選択肢を取得 ---
 def ensure_choices_sheet(client):
-    """選択肢マスタシートがなければ作成し、サンプルデータを入れる"""
+    """「管理」シートがなければ作成し、サンプルデータを入れる"""
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
         try:
             sh.worksheet(CHOICES_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
+            # シートがない場合のみ作成
             ws = sh.add_worksheet(title=CHOICES_SHEET_NAME, rows=100, cols=2)
             ws.append_row(['サイト', 'カテゴリ']) # ヘッダー
             # 初期データ（例）
@@ -147,19 +150,23 @@ def ensure_choices_sheet(client):
             ws.append_row(['メルカリ', 'レディース腕時計'])
             ws.append_row(['ヤフオク', 'カメラ'])
     except Exception as e:
-        st.error(f"マスタシート初期化エラー: {e}")
+        st.error(f"管理シート初期化エラー: {e}")
 
 def get_choices_df(client):
-    """マスタシートから選択肢を取得"""
+    """「管理」シートからデータを取得"""
     ensure_choices_sheet(client)
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(CHOICES_SHEET_NAME)
         data = sheet.get_all_values()
+        
+        # データがヘッダー含めて2行以上ないと選択肢が作れない
         if len(data) < 2:
             return pd.DataFrame(columns=['サイト', 'カテゴリ'])
+        
+        # 全て文字列として読み込む
         return pd.DataFrame(data[1:], columns=data[0]).astype(str)
     except Exception as e:
-        st.error(f"マスタデータ読み込みエラー: {e}")
+        st.error(f"管理シート読み込みエラー: {e}")
         return pd.DataFrame(columns=['サイト', 'カテゴリ'])
 
 # --- データ読み込み ---
@@ -325,11 +332,11 @@ def main():
     if full_df is None:
         return
 
-    # --- 【変更点】選択肢マスタから選択肢を生成 ---
+    # --- 「管理」シートから選択肢を生成 ---
     choices_df = get_choices_df(client)
     if not choices_df.empty:
+        # 重複を除去してリスト化
         valid_pairs = choices_df[['サイト', 'カテゴリ']].drop_duplicates()
-        # 空のデータを除外してリスト化
         valid_options = sorted([
             f"{r['サイト']} - {r['カテゴリ']}" 
             for _, r in valid_pairs.iterrows() 
@@ -350,7 +357,9 @@ def main():
     display_df.index = range(1, len(display_df) + 1)
 
     st.markdown(f"### {current_user_name} さんの通知設定")
-    st.info("💡 ヒント: プルダウンに希望のサイト・カテゴリがない場合は、スプレッドシートの「選択肢マスタ」シートに追加してください。")
+    
+    if not valid_options:
+        st.warning("⚠️ 「管理」シートに選択肢（サイト・カテゴリ）が登録されていません。スプレッドシートを確認してください。")
 
     column_config = {
         "_index": st.column_config.NumberColumn("No.", disabled=True),
