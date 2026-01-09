@@ -15,6 +15,7 @@ TOKEN_PATH = 'gspread_token.json'
 SPREADSHEET_ID = "1Y8VEVn95FOp5ELLtBiuUrB9m4S3qDSiX50G6aB88vnk"
 TARGET_SHEET_NAME = "ユーザー設定"
 USERS_SHEET_NAME = "ユーザー管理"
+CHOICES_SHEET_NAME = "選択肢マスタ" # 【追加】選択肢を管理するシート名
 
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets',
@@ -131,6 +132,36 @@ def login_user(client, login_input, password):
     else:
         return False, "パスワードが間違っています。", "", ""
 
+# --- 【新規】選択肢マスタの管理 ---
+def ensure_choices_sheet(client):
+    """選択肢マスタシートがなければ作成し、サンプルデータを入れる"""
+    try:
+        sh = client.open_by_key(SPREADSHEET_ID)
+        try:
+            sh.worksheet(CHOICES_SHEET_NAME)
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet(title=CHOICES_SHEET_NAME, rows=100, cols=2)
+            ws.append_row(['サイト', 'カテゴリ']) # ヘッダー
+            # 初期データ（例）
+            ws.append_row(['メルカリ', 'バッグ'])
+            ws.append_row(['メルカリ', 'レディース腕時計'])
+            ws.append_row(['ヤフオク', 'カメラ'])
+    except Exception as e:
+        st.error(f"マスタシート初期化エラー: {e}")
+
+def get_choices_df(client):
+    """マスタシートから選択肢を取得"""
+    ensure_choices_sheet(client)
+    try:
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(CHOICES_SHEET_NAME)
+        data = sheet.get_all_values()
+        if len(data) < 2:
+            return pd.DataFrame(columns=['サイト', 'カテゴリ'])
+        return pd.DataFrame(data[1:], columns=data[0]).astype(str)
+    except Exception as e:
+        st.error(f"マスタデータ読み込みエラー: {e}")
+        return pd.DataFrame(columns=['サイト', 'カテゴリ'])
+
 # --- データ読み込み ---
 def load_data(client):
     try:
@@ -153,20 +184,18 @@ def load_data(client):
         st.error(f"データ読み込みエラー: {e}")
         return None
 
-# --- データ保存処理 (強化版) ---
+# --- データ保存処理 ---
 def save_merged_data(client, full_df, edited_display_df, user_id):
     try:
         new_rows = []
         error_rows = False
         
-        # 編集データの解析
         for i, row in edited_display_df.iterrows():
             combo = row['検索条件']
             keywords = row['ブランドキーワード']
             
-            # コンボボックスが空、または正しい形式でない場合はスキップせずに警告フラグを立てる
+            # コンボボックスが正しい形式かチェック
             if not combo or not isinstance(combo, str) or " - " not in combo:
-                # 行自体が完全に空なら無視してOKだが、中途半端に入力されている場合はユーザーに知らせる
                 if combo or keywords: 
                     st.warning(f"⚠️ 行 No.{i+1}: サイトとカテゴリの選択が無効です。保存されません。")
                     error_rows = True
@@ -184,9 +213,9 @@ def save_merged_data(client, full_df, edited_display_df, user_id):
             })
 
         if error_rows:
-            st.error("入力内容に不備があるため、一部の行が処理されませんでした。修正して再度保存してください。")
-            return None
+            st.error("入力内容に不備がある行は無視されました。")
         
+        # ユーザーが全削除した場合に対応
         if new_rows:
             save_user_df = pd.DataFrame(new_rows)
         else:
@@ -205,30 +234,24 @@ def save_merged_data(client, full_df, edited_display_df, user_id):
         
         final_df = pd.concat([other_users_df, save_user_df], ignore_index=True)
         
-        # --- 書き込み実行 ---
+        # 書き込み実行
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(TARGET_SHEET_NAME)
         update_data = [final_df.columns.tolist()] + final_df.astype(str).values.tolist()
         
         sheet.clear()
         
-        # gspreadのバージョン互換性対応
         try:
-            # 新しいバージョン (v6.0.0以降)
             sheet.update(values=update_data, range_name='A1')
         except TypeError:
-            # 古いバージョン
             sheet.update('A1', update_data)
         
-        # 自分のデータ件数をカウント
-        my_count = len(save_user_df)
-        st.success(f"✅ 設定を保存しました！（あなたの設定: {my_count}件）")
+        st.success(f"✅ 設定を保存しました！（{len(save_user_df)}件）")
         return final_df
 
     except Exception as e:
-        st.error(f"保存中にエラーが発生しました。\n詳細: {e}")
-        # 権限エラーの可能性を示唆
-        if "403" in str(e) or "PERMISSION_DENIED" in str(e):
-            st.error("⚠️ ヒント: 認証に使用したGoogleアカウントに、このスプレッドシートの「編集権限」が付与されていない可能性があります。スプレッドシートの「共有」設定を確認してください。")
+        st.error(f"保存エラー: {e}")
+        if "403" in str(e):
+            st.error("権限エラー: アカウントに編集権限がありません。")
         return None
 
 # --- メイン画面 ---
@@ -302,19 +325,20 @@ def main():
     if full_df is None:
         return
 
-    # 選択肢生成
-    if not full_df.empty:
-        valid_pairs_df = full_df[['サイト', 'カテゴリ']].drop_duplicates()
-        valid_pairs_df = valid_pairs_df[
-            (valid_pairs_df['サイト'] != '') & 
-            (valid_pairs_df['カテゴリ'] != '') & 
-            (valid_pairs_df['サイト'].notna()) & 
-            (valid_pairs_df['カテゴリ'].notna())
-        ]
-        valid_options = sorted([f"{row['サイト']} - {row['カテゴリ']}" for _, row in valid_pairs_df.iterrows()])
+    # --- 【変更点】選択肢マスタから選択肢を生成 ---
+    choices_df = get_choices_df(client)
+    if not choices_df.empty:
+        valid_pairs = choices_df[['サイト', 'カテゴリ']].drop_duplicates()
+        # 空のデータを除外してリスト化
+        valid_options = sorted([
+            f"{r['サイト']} - {r['カテゴリ']}" 
+            for _, r in valid_pairs.iterrows() 
+            if r['サイト'] and r['カテゴリ']
+        ])
     else:
         valid_options = []
 
+    # ユーザーデータ取得
     user_df = full_df[full_df['ユーザーID'] == str(current_user_id)].copy()
 
     if not user_df.empty:
@@ -326,6 +350,7 @@ def main():
     display_df.index = range(1, len(display_df) + 1)
 
     st.markdown(f"### {current_user_name} さんの通知設定")
+    st.info("💡 ヒント: プルダウンに希望のサイト・カテゴリがない場合は、スプレッドシートの「選択肢マスタ」シートに追加してください。")
 
     column_config = {
         "_index": st.column_config.NumberColumn("No.", disabled=True),
@@ -352,11 +377,10 @@ def main():
     col1, col2 = st.columns([1, 4])
     with col1:
         if st.button("💾 変更を保存", type="primary"):
-            # 重複・不備チェック
             valid_entries = edited_display_df[edited_display_df['検索条件'].notna() & (edited_display_df['検索条件'] != "")]
             if valid_entries['検索条件'].duplicated().any():
                 duplicates = valid_entries[valid_entries['検索条件'].duplicated()]['検索条件'].unique()
-                st.error(f"⚠️ エラー: 以下のカテゴリが重複しています。\n\n" + ", ".join(duplicates))
+                st.error(f"⚠️ 重複エラー: 以下を1つにまとめてください。\n\n" + ", ".join(duplicates))
             else:
                 new_full_df = save_merged_data(client, full_df, edited_display_df, current_user_id)
                 if new_full_df is not None:
