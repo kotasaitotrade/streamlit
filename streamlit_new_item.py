@@ -28,14 +28,23 @@ st.set_page_config(page_title="通知設定マネージャー", layout="wide")
 
 # --- 【追加】Secretsからファイルを生成する関数 ---
 def create_json_from_secrets():
+    # 内部関数: どんなに深い階層でも標準の辞書(dict)に変換する
+    def recursive_dict(d):
+        if hasattr(d, 'items'):
+            return {k: recursive_dict(v) for k, v in d.items()}
+        return d
+
     # Streamlit CloudのSecretsに設定がある場合、ファイルを作成する
     if "google_credentials" in st.secrets:
         with open(CREDENTIALS_PATH, "w") as f:
-            f.write(json.dumps(dict(st.secrets["google_credentials"])))
+            # 再帰的に辞書に変換してからJSON化
+            creds_dict = recursive_dict(st.secrets["google_credentials"])
+            f.write(json.dumps(creds_dict))
     
     if "gspread_token" in st.secrets:
         with open(TOKEN_PATH, "w") as f:
-            f.write(json.dumps(dict(st.secrets["gspread_token"])))
+            token_dict = recursive_dict(st.secrets["gspread_token"])
+            f.write(json.dumps(token_dict))
 
 # 起動時に一度だけ実行してファイルを作る
 create_json_from_secrets()
