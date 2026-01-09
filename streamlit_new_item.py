@@ -178,7 +178,7 @@ def get_choices_df(_client):
             st.error(f"管理シート読み込みエラー: {e}")
             return pd.DataFrame(columns=['サイト', 'カテゴリ'])
 
-# --- 【修正】設定データの読み込み（自動移行機能付き） ---
+# --- 設定データの読み込み（自動移行機能付き） ---
 @st.cache_data(ttl=60)
 def load_data(_client):
     max_retries = 3
@@ -187,7 +187,6 @@ def load_data(_client):
             sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(TARGET_SHEET_NAME)
             data = sheet.get_all_values()
             
-            # 最終的な期待列
             final_cols = ['ユーザーID', '検索条件', 'ブランドキーワード']
 
             if not data:
@@ -198,20 +197,15 @@ def load_data(_client):
             df = pd.DataFrame(rows, columns=headers).astype(str)
             
             # --- 自動移行ロジック ---
-            # 旧形式（サイト, カテゴリ列がある）場合、検索条件列にマージする
             if 'サイト' in df.columns and 'カテゴリ' in df.columns:
-                # 検索条件列がまだなければ作成
                 if '検索条件' not in df.columns:
                     df['検索条件'] = df['サイト'] + " - " + df['カテゴリ']
-                # 旧列を削除
                 df = df.drop(columns=['サイト', 'カテゴリ'], errors='ignore')
             
-            # 不足カラムの補完
             for col in final_cols:
                 if col not in df.columns:
                     df[col] = ""
             
-            # 列の順序を整えて返す
             return df[final_cols]
 
         except APIError as e:
@@ -224,7 +218,7 @@ def load_data(_client):
             st.error(f"データ読み込みエラー: {e}")
             return None
 
-# --- 【修正】データ保存処理（結合したまま保存） ---
+# --- データ保存処理 ---
 def save_merged_data(client, full_df, edited_display_df, user_id):
     try:
         new_rows = []
@@ -234,14 +228,12 @@ def save_merged_data(client, full_df, edited_display_df, user_id):
             combo = row['検索条件']
             keywords = row['ブランドキーワード']
             
-            # バリデーション: 空ではなく、文字列であること
             if not combo or not isinstance(combo, str):
                 if combo or keywords: 
                     st.warning(f"⚠️ 行 No.{i+1}: 検索条件が無効です。保存されません。")
                     error_rows = True
                 continue
 
-            # 【変更】分割せずにそのまま保存する
             new_rows.append({
                 'ユーザーID': str(user_id),
                 '検索条件': combo,
@@ -256,7 +248,6 @@ def save_merged_data(client, full_df, edited_display_df, user_id):
         else:
             save_user_df = pd.DataFrame(columns=['ユーザーID', '検索条件', 'ブランドキーワード'])
 
-        # 他のユーザーデータを保持
         other_users_df = full_df[full_df['ユーザーID'] != str(user_id)]
         
         cols = ['ユーザーID', '検索条件', 'ブランドキーワード']
@@ -326,8 +317,24 @@ def main():
 
         with tab2:
             st.subheader("新規登録")
-            st.info("DiscordのユーザーIDと、表示用のユーザー名を設定してください。")
-            r_id = st.text_input("DiscordユーザーID (必須)", key="reg_id")
+            st.info("※ 通知を送るためにDiscordのユーザーID（数字の羅列）が必要です。")
+            
+            # --- 【追加】わかりやすいID取得手順 ---
+            with st.expander("❓ DiscordユーザーIDの取得方法がわからない方はこちら"):
+                st.markdown("""
+                DiscordのIDを取得するには「開発者モード」をONにする必要があります。
+                
+                1. **設定を開く**: 左下の歯車アイコン（ユーザー設定）をクリック
+                2. **詳細設定**: 左メニューの「アプリの設定」カテゴリにある「詳細設定」をクリック
+                3. **開発者モードON**: 「開発者モード」のスイッチを **ON** にする
+                4. **IDをコピー**: 
+                    * 自分のアイコン（左下の名前など）を **右クリック**
+                    * メニューの一番下にある **「ユーザーIDをコピー」** をクリック
+                5. コピーした数字（例: `123456789012345678`）を下の入力欄に貼り付けてください。
+                """)
+            # -----------------------------------
+
+            r_id = st.text_input("DiscordユーザーID (必須)", key="reg_id", help="開発者モードをONにして、アイコン右クリックでコピーできます")
             r_name = st.text_input("ユーザー名 (表示用)", key="reg_name")
             r_pass = st.text_input("パスワード", type="password", key="reg_pass")
             r_pass_conf = st.text_input("パスワード(確認)", type="password", key="reg_pass_conf")
@@ -376,16 +383,18 @@ def main():
 
     user_df = full_df[full_df['ユーザーID'] == str(current_user_id)].copy()
 
-    # 表示用データ準備（既に「検索条件」列があるはず）
     if '検索条件' in user_df.columns:
         display_df = user_df[['検索条件', 'ブランドキーワード']].copy()
     else:
-        # 万が一ない場合のフォールバック
         display_df = pd.DataFrame(columns=['検索条件', 'ブランドキーワード'])
 
     display_df.index = range(1, len(display_df) + 1)
 
     st.markdown(f"### {current_user_name} さんの通知設定")
+    
+    # メンション通知の案内
+    st.info(f"📢 **ここに登録した条件に一致する商品が見つかると、あなたのDiscord ID ({current_user_id}) 宛にメンション通知が届きます。**")
+
     if not valid_options:
         st.warning("⚠️ 「管理」シートに選択肢がありません。データを確認してください。")
 
