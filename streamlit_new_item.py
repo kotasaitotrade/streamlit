@@ -9,7 +9,6 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
 # --- 設定 ---
-# ファイルパスの設定
 CREDENTIALS_PATH = 'google_credentials.json' 
 TOKEN_PATH = 'gspread_token.json'
 
@@ -24,9 +23,8 @@ SCOPES = [
 
 st.set_page_config(page_title="通知設定マネージャー", layout="wide")
 
-# --- Secretsからファイルを生成する関数 (JSONエラー対策済み) ---
+# --- Secrets処理 ---
 def create_json_from_secrets():
-    # 内部関数: AttrDict等を再帰的に標準の辞書(dict)に変換
     def recursive_dict(d):
         if hasattr(d, 'items'):
             return {k: recursive_dict(v) for k, v in d.items()}
@@ -45,10 +43,9 @@ def create_json_from_secrets():
     except Exception as e:
         st.error(f"Secrets読み込みエラー: {e}")
 
-# 起動時に実行
 create_json_from_secrets()
 
-# --- 関数: 認証ロジック (Google API) ---
+# --- 認証関連 ---
 def get_gspread_client():
     creds = None
     if os.path.exists(TOKEN_PATH):
@@ -71,44 +68,11 @@ def get_gspread_client():
             creds = None
 
     if not os.path.exists(CREDENTIALS_PATH):
-        # ローカル実行時のフォールバック用メッセージ（Cloudでは出ないはず）
-        st.error(f"認証ファイルが見つかりません。Secretsの設定を確認してください。")
+        st.error("認証ファイルが見つかりません。Secretsの設定を確認してください。")
         return None
-
-    # 以下は初回認証フロー（Cloud上では使われませんが念のため残します）
-    if 'auth_flow' not in st.session_state:
-        flow = Flow.from_client_secrets_file(
-            CREDENTIALS_PATH,
-            scopes=SCOPES,
-            redirect_uri='http://localhost:8080/'
-        )
-        st.session_state['auth_flow'] = flow
-    
-    flow = st.session_state['auth_flow']
-
-    if 'auth_url' not in st.session_state:
-        auth_url, _ = flow.authorization_url(prompt='consent')
-        st.session_state['auth_url'] = auth_url
-
-    st.warning("⚠️ 初回認証が必要です（ローカル環境用）")
-    st.markdown(f"**[👉 認証URL]({st.session_state['auth_url']})**")
-    auth_response_url = st.text_input("URL貼り付け:", key="auth_url_input")
-
-    if st.button("認証完了"):
-        if auth_response_url:
-            try:
-                os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
-                flow.fetch_token(authorization_response=auth_response_url)
-                creds = flow.credentials
-                with open(TOKEN_PATH, 'w') as token:
-                    token.write(creds.to_json())
-                st.success("認証成功")
-                st.rerun()
-            except Exception as e:
-                st.error(f"認証エラー: {e}")
     return None
 
-# --- 関数: ユーザー認証システム ---
+# --- ユーザー管理 ---
 def hash_password(password):
     return hashlib.sha256(str(password).encode('utf-8')).hexdigest()
 
@@ -167,7 +131,7 @@ def login_user(client, login_input, password):
     else:
         return False, "パスワードが間違っています。", "", ""
 
-# --- 関数: 設定データ読み込み ---
+# --- データ読み込み ---
 def load_data(client):
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(TARGET_SHEET_NAME)
@@ -189,35 +153,49 @@ def load_data(client):
         st.error(f"データ読み込みエラー: {e}")
         return None
 
-# --- 関数: データのマージと保存 (修正版) ---
+# --- データ保存処理 (強化版) ---
 def save_merged_data(client, full_df, edited_display_df, user_id):
     try:
         new_rows = []
-        for _, row in edited_display_df.iterrows():
+        error_rows = False
+        
+        # 編集データの解析
+        for i, row in edited_display_df.iterrows():
             combo = row['検索条件']
             keywords = row['ブランドキーワード']
             
-            if isinstance(combo, str) and " - " in combo:
-                parts = combo.split(" - ", 1)
-                site = parts[0]
-                category = parts[1]
-                
-                new_rows.append({
-                    'ユーザーID': str(user_id),
-                    'サイト': site,
-                    'カテゴリ': category,
-                    'ブランドキーワード': keywords
-                })
+            # コンボボックスが空、または正しい形式でない場合はスキップせずに警告フラグを立てる
+            if not combo or not isinstance(combo, str) or " - " not in combo:
+                # 行自体が完全に空なら無視してOKだが、中途半端に入力されている場合はユーザーに知らせる
+                if combo or keywords: 
+                    st.warning(f"⚠️ 行 No.{i+1}: サイトとカテゴリの選択が無効です。保存されません。")
+                    error_rows = True
+                continue
+
+            parts = combo.split(" - ", 1)
+            site = parts[0]
+            category = parts[1]
+            
+            new_rows.append({
+                'ユーザーID': str(user_id),
+                'サイト': site,
+                'カテゴリ': category,
+                'ブランドキーワード': keywords
+            })
+
+        if error_rows:
+            st.error("入力内容に不備があるため、一部の行が処理されませんでした。修正して再度保存してください。")
+            return None
         
         if new_rows:
             save_user_df = pd.DataFrame(new_rows)
         else:
             save_user_df = pd.DataFrame(columns=['ユーザーID', 'サイト', 'カテゴリ', 'ブランドキーワード'])
 
+        # 他のユーザーデータを保持
         other_users_df = full_df[full_df['ユーザーID'] != str(user_id)]
         
         cols = ['ユーザーID', 'サイト', 'カテゴリ', 'ブランドキーワード']
-        
         for c in cols:
             if c not in save_user_df.columns: save_user_df[c] = ""
             if c not in other_users_df.columns: other_users_df[c] = ""
@@ -227,18 +205,30 @@ def save_merged_data(client, full_df, edited_display_df, user_id):
         
         final_df = pd.concat([other_users_df, save_user_df], ignore_index=True)
         
-        # --- スプレッドシート更新処理 (gspread v6対応) ---
+        # --- 書き込み実行 ---
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(TARGET_SHEET_NAME)
         update_data = [final_df.columns.tolist()] + final_df.astype(str).values.tolist()
         
         sheet.clear()
-        # valuesキーワード引数を使用し、開始位置A1を指定して書き込む
-        sheet.update(values=update_data, range_name='A1')
         
-        st.success("✅ 設定を保存しました！")
+        # gspreadのバージョン互換性対応
+        try:
+            # 新しいバージョン (v6.0.0以降)
+            sheet.update(values=update_data, range_name='A1')
+        except TypeError:
+            # 古いバージョン
+            sheet.update('A1', update_data)
+        
+        # 自分のデータ件数をカウント
+        my_count = len(save_user_df)
+        st.success(f"✅ 設定を保存しました！（あなたの設定: {my_count}件）")
         return final_df
+
     except Exception as e:
-        st.error(f"保存中にエラーが発生しました: {e}")
+        st.error(f"保存中にエラーが発生しました。\n詳細: {e}")
+        # 権限エラーの可能性を示唆
+        if "403" in str(e) or "PERMISSION_DENIED" in str(e):
+            st.error("⚠️ ヒント: 認証に使用したGoogleアカウントに、このスプレッドシートの「編集権限」が付与されていない可能性があります。スプレッドシートの「共有」設定を確認してください。")
         return None
 
 # --- メイン画面 ---
@@ -253,7 +243,7 @@ def main():
         st.session_state['logged_in_user_id'] = None
         st.session_state['logged_in_user_name'] = None
 
-    # --- ログイン前画面 ---
+    # --- ログイン前 ---
     if st.session_state['logged_in_user_id'] is None:
         tab1, tab2 = st.tabs(["🔑 ログイン", "✨ 新規登録"])
         
@@ -272,7 +262,7 @@ def main():
                     else:
                         st.error(msg)
                 else:
-                    st.warning("ID/ユーザー名とパスワードを入力してください")
+                    st.warning("入力してください")
 
         with tab2:
             st.subheader("新規登録")
@@ -296,7 +286,7 @@ def main():
                     st.warning("全ての項目を入力してください")
         st.stop()
 
-    # --- ログイン後画面 ---
+    # --- ログイン後 ---
     current_user_id = st.session_state['logged_in_user_id']
     current_user_name = st.session_state['logged_in_user_name']
     
@@ -312,7 +302,7 @@ def main():
     if full_df is None:
         return
 
-    # 選択肢の生成
+    # 選択肢生成
     if not full_df.empty:
         valid_pairs_df = full_df[['サイト', 'カテゴリ']].drop_duplicates()
         valid_pairs_df = valid_pairs_df[
@@ -362,7 +352,7 @@ def main():
     col1, col2 = st.columns([1, 4])
     with col1:
         if st.button("💾 変更を保存", type="primary"):
-            # 重複チェック
+            # 重複・不備チェック
             valid_entries = edited_display_df[edited_display_df['検索条件'].notna() & (edited_display_df['検索条件'] != "")]
             if valid_entries['検索条件'].duplicated().any():
                 duplicates = valid_entries[valid_entries['検索条件'].duplicated()]['検索条件'].unique()
