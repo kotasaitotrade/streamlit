@@ -4,9 +4,11 @@ import gspread
 import os
 import hashlib
 import json
+import time
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
+from gspread.exceptions import APIError
 
 # --- 設定 ---
 CREDENTIALS_PATH = 'google_credentials.json' 
@@ -15,9 +17,9 @@ TOKEN_PATH = 'gspread_token.json'
 SPREADSHEET_ID = "1Y8VEVn95FOp5ELLtBiuUrB9m4S3qDSiX50G6aB88vnk"
 
 # シート名の設定
-TARGET_SHEET_NAME = "ユーザー設定"  # ユーザーごとの設定保存先
-USERS_SHEET_NAME = "ユーザー管理"   # ログイン情報の管理
-CHOICES_SHEET_NAME = "管理"        # 【変更】選択肢マスタ（サイト・カテゴリ定義）
+TARGET_SHEET_NAME = "ユーザー設定"
+USERS_SHEET_NAME = "ユーザー管理"
+CHOICES_SHEET_NAME = "管理" # 選択肢マスタ
 
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets',
@@ -90,19 +92,29 @@ def ensure_users_sheet(client):
     except Exception as e:
         st.error(f"ユーザーDB初期化エラー: {e}")
 
-def get_users_df(client):
-    ensure_users_sheet(client)
-    try:
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
-        data = sheet.get_all_values()
-        if len(data) < 2:
+@st.cache_data(ttl=60)
+def get_users_df(_client):
+    ensure_users_sheet(_client)
+    max_retries = 3
+    for i in range(max_retries):
+        try:
+            sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
+            data = sheet.get_all_values()
+            if len(data) < 2:
+                return pd.DataFrame(columns=['ユーザーID', 'ユーザー名', 'パスワードハッシュ'])
+            return pd.DataFrame(data[1:], columns=data[0]).astype(str)
+        except APIError as e:
+            if "429" in str(e) and i < max_retries - 1:
+                time.sleep(2 ** i)
+                continue
+            st.error(f"ユーザー情報取得エラー: {e}")
             return pd.DataFrame(columns=['ユーザーID', 'ユーザー名', 'パスワードハッシュ'])
-        return pd.DataFrame(data[1:], columns=data[0]).astype(str)
-    except Exception as e:
-        st.error(f"ユーザー情報取得エラー: {e}")
-        return pd.DataFrame(columns=['ユーザーID', 'ユーザー名', 'パスワードハッシュ'])
+        except Exception as e:
+            st.error(f"エラー: {e}")
+            return pd.DataFrame(columns=['ユーザーID', 'ユーザー名', 'パスワードハッシュ'])
 
 def register_user(client, user_id, user_name, password):
+    get_users_df.clear() # キャッシュクリア
     users_df = get_users_df(client)
     if str(user_id) in users_df['ユーザーID'].values:
         return False, "このユーザーIDは既に登録されています。"
@@ -113,6 +125,7 @@ def register_user(client, user_id, user_name, password):
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         hashed_pw = hash_password(password)
         sheet.append_row([str(user_id), str(user_name), hashed_pw])
+        get_users_df.clear()
         return True, "登録が完了しました。ログインしてください。"
     except Exception as e:
         return False, f"登録エラー: {e}"
@@ -134,64 +147,84 @@ def login_user(client, login_input, password):
     else:
         return False, "パスワードが間違っています。", "", ""
 
-# --- 【変更】「管理」シートから選択肢を取得 ---
-def ensure_choices_sheet(client):
-    """「管理」シートがなければ作成し、サンプルデータを入れる"""
-    try:
-        sh = client.open_by_key(SPREADSHEET_ID)
+# --- 管理シート（選択肢）の取得 ---
+@st.cache_data(ttl=60)
+def get_choices_df(_client):
+    max_retries = 3
+    for i in range(max_retries):
         try:
-            sh.worksheet(CHOICES_SHEET_NAME)
-        except gspread.exceptions.WorksheetNotFound:
-            # シートがない場合のみ作成
-            ws = sh.add_worksheet(title=CHOICES_SHEET_NAME, rows=100, cols=2)
-            ws.append_row(['サイト', 'カテゴリ']) # ヘッダー
-            # 初期データ（例）
-            ws.append_row(['メルカリ', 'バッグ'])
-            ws.append_row(['メルカリ', 'レディース腕時計'])
-            ws.append_row(['ヤフオク', 'カメラ'])
-    except Exception as e:
-        st.error(f"管理シート初期化エラー: {e}")
+            try:
+                sh = _client.open_by_key(SPREADSHEET_ID)
+                sheet = sh.worksheet(CHOICES_SHEET_NAME)
+            except gspread.exceptions.WorksheetNotFound:
+                ws = sh.add_worksheet(title=CHOICES_SHEET_NAME, rows=100, cols=2)
+                ws.append_row(['サイト', 'カテゴリ'])
+                ws.append_row(['メルカリ', 'バッグ'])
+                sheet = ws
 
-def get_choices_df(client):
-    """「管理」シートからデータを取得"""
-    ensure_choices_sheet(client)
-    try:
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(CHOICES_SHEET_NAME)
-        data = sheet.get_all_values()
-        
-        # データがヘッダー含めて2行以上ないと選択肢が作れない
-        if len(data) < 2:
+            data = sheet.get_all_values()
+            if len(data) < 2:
+                return pd.DataFrame(columns=['サイト', 'カテゴリ'])
+            
+            return pd.DataFrame(data[1:], columns=data[0]).astype(str)
+            
+        except APIError as e:
+            if "429" in str(e) and i < max_retries - 1:
+                time.sleep(2 ** i)
+                continue
+            st.error(f"管理シート読み込みエラー(API制限): {e}")
             return pd.DataFrame(columns=['サイト', 'カテゴリ'])
-        
-        # 全て文字列として読み込む
-        return pd.DataFrame(data[1:], columns=data[0]).astype(str)
-    except Exception as e:
-        st.error(f"管理シート読み込みエラー: {e}")
-        return pd.DataFrame(columns=['サイト', 'カテゴリ'])
+        except Exception as e:
+            st.error(f"管理シート読み込みエラー: {e}")
+            return pd.DataFrame(columns=['サイト', 'カテゴリ'])
 
-# --- データ読み込み ---
-def load_data(client):
-    try:
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(TARGET_SHEET_NAME)
-        data = sheet.get_all_values()
-        expected_cols = ['ユーザーID', 'サイト', 'カテゴリ', 'ブランドキーワード']
+# --- 【修正】設定データの読み込み（自動移行機能付き） ---
+@st.cache_data(ttl=60)
+def load_data(_client):
+    max_retries = 3
+    for i in range(max_retries):
+        try:
+            sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(TARGET_SHEET_NAME)
+            data = sheet.get_all_values()
+            
+            # 最終的な期待列
+            final_cols = ['ユーザーID', '検索条件', 'ブランドキーワード']
 
-        if not data:
-            return pd.DataFrame(columns=expected_cols)
-        
-        headers = data[0]
-        rows = data[1:]
-        df = pd.DataFrame(rows, columns=headers).astype(str)
-        
-        for col in expected_cols:
-            if col not in df.columns:
-                df[col] = ""
-        return df
-    except Exception as e:
-        st.error(f"データ読み込みエラー: {e}")
-        return None
+            if not data:
+                return pd.DataFrame(columns=final_cols)
+            
+            headers = data[0]
+            rows = data[1:]
+            df = pd.DataFrame(rows, columns=headers).astype(str)
+            
+            # --- 自動移行ロジック ---
+            # 旧形式（サイト, カテゴリ列がある）場合、検索条件列にマージする
+            if 'サイト' in df.columns and 'カテゴリ' in df.columns:
+                # 検索条件列がまだなければ作成
+                if '検索条件' not in df.columns:
+                    df['検索条件'] = df['サイト'] + " - " + df['カテゴリ']
+                # 旧列を削除
+                df = df.drop(columns=['サイト', 'カテゴリ'], errors='ignore')
+            
+            # 不足カラムの補完
+            for col in final_cols:
+                if col not in df.columns:
+                    df[col] = ""
+            
+            # 列の順序を整えて返す
+            return df[final_cols]
 
-# --- データ保存処理 ---
+        except APIError as e:
+            if "429" in str(e) and i < max_retries - 1:
+                time.sleep(2 ** i)
+                continue
+            st.error(f"データ読み込みエラー(API制限): {e}")
+            return None
+        except Exception as e:
+            st.error(f"データ読み込みエラー: {e}")
+            return None
+
+# --- 【修正】データ保存処理（結合したまま保存） ---
 def save_merged_data(client, full_df, edited_display_df, user_id):
     try:
         new_rows = []
@@ -201,37 +234,32 @@ def save_merged_data(client, full_df, edited_display_df, user_id):
             combo = row['検索条件']
             keywords = row['ブランドキーワード']
             
-            # コンボボックスが正しい形式かチェック
-            if not combo or not isinstance(combo, str) or " - " not in combo:
+            # バリデーション: 空ではなく、文字列であること
+            if not combo or not isinstance(combo, str):
                 if combo or keywords: 
-                    st.warning(f"⚠️ 行 No.{i+1}: サイトとカテゴリの選択が無効です。保存されません。")
+                    st.warning(f"⚠️ 行 No.{i+1}: 検索条件が無効です。保存されません。")
                     error_rows = True
                 continue
 
-            parts = combo.split(" - ", 1)
-            site = parts[0]
-            category = parts[1]
-            
+            # 【変更】分割せずにそのまま保存する
             new_rows.append({
                 'ユーザーID': str(user_id),
-                'サイト': site,
-                'カテゴリ': category,
+                '検索条件': combo,
                 'ブランドキーワード': keywords
             })
 
         if error_rows:
             st.error("入力内容に不備がある行は無視されました。")
         
-        # ユーザーが全削除した場合に対応
         if new_rows:
             save_user_df = pd.DataFrame(new_rows)
         else:
-            save_user_df = pd.DataFrame(columns=['ユーザーID', 'サイト', 'カテゴリ', 'ブランドキーワード'])
+            save_user_df = pd.DataFrame(columns=['ユーザーID', '検索条件', 'ブランドキーワード'])
 
         # 他のユーザーデータを保持
         other_users_df = full_df[full_df['ユーザーID'] != str(user_id)]
         
-        cols = ['ユーザーID', 'サイト', 'カテゴリ', 'ブランドキーワード']
+        cols = ['ユーザーID', '検索条件', 'ブランドキーワード']
         for c in cols:
             if c not in save_user_df.columns: save_user_df[c] = ""
             if c not in other_users_df.columns: other_users_df[c] = ""
@@ -241,7 +269,6 @@ def save_merged_data(client, full_df, edited_display_df, user_id):
         
         final_df = pd.concat([other_users_df, save_user_df], ignore_index=True)
         
-        # 書き込み実行
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(TARGET_SHEET_NAME)
         update_data = [final_df.columns.tolist()] + final_df.astype(str).values.tolist()
         
@@ -251,6 +278,8 @@ def save_merged_data(client, full_df, edited_display_df, user_id):
             sheet.update(values=update_data, range_name='A1')
         except TypeError:
             sheet.update('A1', update_data)
+        
+        load_data.clear() # キャッシュクリア
         
         st.success(f"✅ 設定を保存しました！（{len(save_user_df)}件）")
         return final_df
@@ -283,6 +312,7 @@ def main():
             l_pass = st.text_input("パスワード", type="password", key="login_pass")
             if st.button("ログイン", type="primary"):
                 if l_input and l_pass:
+                    get_users_df.clear()
                     success, msg, u_id, u_name = login_user(client, l_input, l_pass)
                     if success:
                         st.session_state['logged_in_user_id'] = u_id
@@ -332,10 +362,9 @@ def main():
     if full_df is None:
         return
 
-    # --- 「管理」シートから選択肢を生成 ---
+    # 管理シートから選択肢を取得
     choices_df = get_choices_df(client)
     if not choices_df.empty:
-        # 重複を除去してリスト化
         valid_pairs = choices_df[['サイト', 'カテゴリ']].drop_duplicates()
         valid_options = sorted([
             f"{r['サイト']} - {r['カテゴリ']}" 
@@ -345,21 +374,20 @@ def main():
     else:
         valid_options = []
 
-    # ユーザーデータ取得
     user_df = full_df[full_df['ユーザーID'] == str(current_user_id)].copy()
 
-    if not user_df.empty:
-        user_df['検索条件'] = user_df.apply(lambda x: f"{x['サイト']} - {x['カテゴリ']}", axis=1)
+    # 表示用データ準備（既に「検索条件」列があるはず）
+    if '検索条件' in user_df.columns:
+        display_df = user_df[['検索条件', 'ブランドキーワード']].copy()
     else:
-        user_df['検索条件'] = []
+        # 万が一ない場合のフォールバック
+        display_df = pd.DataFrame(columns=['検索条件', 'ブランドキーワード'])
 
-    display_df = user_df[['検索条件', 'ブランドキーワード']].copy()
     display_df.index = range(1, len(display_df) + 1)
 
     st.markdown(f"### {current_user_name} さんの通知設定")
-    
     if not valid_options:
-        st.warning("⚠️ 「管理」シートに選択肢（サイト・カテゴリ）が登録されていません。スプレッドシートを確認してください。")
+        st.warning("⚠️ 「管理」シートに選択肢がありません。データを確認してください。")
 
     column_config = {
         "_index": st.column_config.NumberColumn("No.", disabled=True),
@@ -398,6 +426,9 @@ def main():
 
     with col2:
         if st.button("🔄 最新データを再読み込み"):
+            load_data.clear()
+            get_choices_df.clear()
+            get_users_df.clear()
             st.rerun()
 
 if __name__ == "__main__":
