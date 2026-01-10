@@ -6,6 +6,7 @@ import hashlib
 import json
 import time
 import requests
+from datetime import datetime # ★追加：日付を扱うため
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -130,11 +131,15 @@ def fincode_register_card(customer_id, card_no, expire, security_code, holder_na
 def fincode_create_subscription(customer_id, plan_id):
     """サブスクリプションを開始する"""
     url = f"{FINCODE_BASE_URL}/subscriptions"
+    
+    # ★修正箇所：今日の日付を取得して設定
+    today_str = datetime.now().strftime('%Y/%m/%d')
+    
     data = {
         "pay_type": "Card",
         "plan_id": plan_id,
         "customer_id": customer_id,
-        "start_date": None
+        "start_date": today_str # ★ここで今日の日付を指定
     }
     res = requests.post(url, json=data, headers=HEADERS).json()
     if "errors" in res:
@@ -163,7 +168,6 @@ def ensure_users_sheet(client):
             sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
             ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=6)
-            # F列: plan_id を追加
             ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id']) 
     except Exception as e:
         st.error(f"ユーザーDB初期化エラー: {e}")
@@ -180,7 +184,6 @@ def get_users_df(_client):
                 return pd.DataFrame(columns=['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id'])
             
             df = pd.DataFrame(data[1:], columns=data[0]).astype(str)
-            # 列補完
             for col in ['fincode_customer_id', 'subscription_id', 'plan_id']:
                 if col not in df.columns: df[col] = ""
             return df
@@ -202,7 +205,6 @@ def register_user(client, user_id, user_name, password):
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         hashed_pw = hash_password(password)
-        # F列まで空文字で埋める
         sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", ""])
         get_users_df.clear()
         return True, "登録完了"
@@ -235,7 +237,7 @@ def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=N
             if subscription_id is not None:
                 ws.update_cell(cell.row, 5, subscription_id) # E列
             if plan_id is not None:
-                ws.update_cell(cell.row, 6, plan_id) # F列 (追加)
+                ws.update_cell(cell.row, 6, plan_id) # F列
             
             get_users_df.clear()
             return True
@@ -353,7 +355,6 @@ def main():
     users_df = get_users_df(client)
     user_row = users_df[users_df['ユーザーID'] == str(uid)].iloc[0]
     
-    # 契約状態の確認
     sub_id = str(user_row.get('subscription_id', ''))
     current_plan_id = str(user_row.get('plan_id', ''))
     is_subscribed = (sub_id != "" and sub_id.lower() != "nan" and sub_id.lower() != "none")
@@ -370,7 +371,6 @@ def main():
         
         st.subheader("📢 通知条件の設定")
         
-        # ★ プランによる制限の案内表示（将来的な実装のために表示のみ）
         if is_subscribed:
             if current_plan_id == PLANS["full"]["id"]:
                 st.info("💎 **フルプラン契約中**: 全てのカテゴリを設定可能です。")
@@ -392,25 +392,18 @@ def main():
         st.subheader("💳 サブスクリプション管理")
         
         if is_subscribed:
-            # === 契約中（解約画面） ===
             st.success("✅ **現在プラン契約中です**")
-            
-            # 契約プラン名の表示
             plan_name = "不明なプラン"
-            if current_plan_id == PLANS["full"]["id"]:
-                plan_name = PLANS["full"]["name"]
-            elif current_plan_id == PLANS["light"]["id"]:
-                plan_name = PLANS["light"]["name"]
-            
+            if current_plan_id == PLANS["full"]["id"]: plan_name = PLANS["full"]["name"]
+            elif current_plan_id == PLANS["light"]["id"]: plan_name = PLANS["light"]["name"]
             st.write(f"**契約プラン**: {plan_name}")
-            st.caption(f"Sub ID: {sub_id} / Plan ID: {current_plan_id}")
+            st.caption(f"Sub ID: {sub_id}")
             
             st.markdown("---")
             if st.button("プランを解約する"):
                 with st.spinner("解約処理中..."):
                     suc, msg = fincode_cancel_subscription(sub_id)
                     if suc:
-                        # DBからIDを削除
                         update_user_fincode_data(client, uid, subscription_id="", plan_id="")
                         st.success("解約が完了しました。")
                         time.sleep(2)
@@ -418,15 +411,8 @@ def main():
                     else:
                         st.error(f"解約エラー: {msg}")
         else:
-            # === 未契約（契約フォーム） ===
             st.info("契約するプランを選択してください。")
-            
-            # ★ プラン選択ラジオボタン
-            plan_key = st.radio(
-                "プラン選択",
-                ["full", "light"],
-                format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['price']:,}/月"
-            )
+            plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['price']:,}/月")
             selected_plan = PLANS[plan_key]
             
             st.write(f"**選択中: {selected_plan['name']}**")
@@ -435,10 +421,10 @@ def main():
             with st.form("pay_form"):
                 st.write("クレジットカード情報")
                 c1, c2 = st.columns(2)
-                card_no = c1.text_input("カード番号", max_chars=16, placeholder="半角数字")
-                holder = c2.text_input("名義", placeholder="TARO YAMADA")
+                card_no = c1.text_input("カード番号", max_chars=16, placeholder="4111111111111111")
+                holder = c2.text_input("名義", placeholder="TARO TEST")
                 c3, c4 = st.columns(2)
-                expire = c3.text_input("有効期限 (YYMM)", max_chars=4, placeholder="2512")
+                expire = c3.text_input("有効期限 (YYMM)", max_chars=4, placeholder="2912")
                 cvc = c4.text_input("セキュリティコード", type="password", max_chars=4)
                 
                 submitted = st.form_submit_button(f"¥{selected_plan['price']:,} で定期購読を開始")
@@ -452,7 +438,6 @@ def main():
                         st.stop()
 
                     with st.spinner("処理中..."):
-                        # 1. 顧客ID
                         f_cust_id = str(user_row.get('fincode_customer_id', ''))
                         if f_cust_id in ["", "nan", "None"]:
                             res = fincode_register_customer(uid)
@@ -462,15 +447,12 @@ def main():
                             f_cust_id = res["id"]
                             update_user_fincode_data(client, uid, fincode_id=f_cust_id)
 
-                        # 2. カード登録
                         res_card = fincode_register_card(f_cust_id, card_no, expire, cvc, holder)
                         if "errors" in res_card:
                             st.error(f"カード登録エラー: {res_card['errors'][0]['error_message']}")
                         else:
-                            # 3. 選んだプランでサブスク開始
                             suc, res_sub_id = fincode_create_subscription(f_cust_id, selected_plan["id"])
                             if suc:
-                                # DBにサブスクIDとプランIDを保存
                                 update_user_fincode_data(client, uid, subscription_id=res_sub_id, plan_id=selected_plan["id"])
                                 st.balloons()
                                 st.success("サブスクリプションを開始しました！")
