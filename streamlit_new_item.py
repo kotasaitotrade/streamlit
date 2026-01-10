@@ -5,13 +5,14 @@ import os
 import hashlib
 import json
 import time
+import requests  # 追加: API通信用
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from gspread.exceptions import APIError
 
 # --- 設定 ---
-CREDENTIALS_PATH = 'google_credentials.json' 
+CREDENTIALS_PATH = 'google_credentials.json'
 TOKEN_PATH = 'gspread_token.json'
 
 SPREADSHEET_ID = "1Y8VEVn95FOp5ELLtBiuUrB9m4S3qDSiX50G6aB88vnk"
@@ -50,6 +51,20 @@ def create_json_from_secrets():
 
 create_json_from_secrets()
 
+# --- Fincode設定 (Secretsから読み込み) ---
+try:
+    FINCODE_API_KEY = st.secrets["fincode"]["api_key"]
+    FINCODE_BASE_URL = st.secrets["fincode"]["base_url"]
+except Exception:
+    # 設定がない場合のエラーハンドリング（アプリが落ちないようにダミーを入れる）
+    FINCODE_API_KEY = ""
+    FINCODE_BASE_URL = ""
+
+HEADERS = {
+    "Authorization": f"Bearer {FINCODE_API_KEY}",
+    "Content-Type": "application/json"
+}
+
 # --- 認証関連 ---
 def get_gspread_client():
     creds = None
@@ -77,6 +92,67 @@ def get_gspread_client():
         return None
     return None
 
+# --- Fincode API連携関数 ---
+def fincode_register_customer(user_id):
+    """Fincode上に顧客を作成する"""
+    url = f"{FINCODE_BASE_URL}/customers"
+    data = {
+        "id": str(user_id),
+        "description": f"User: {user_id}"
+    }
+    # 既に存在する場合のエラーハンドリングは簡易的
+    response = requests.post(url, json=data, headers=HEADERS)
+    return response.json()
+
+def fincode_register_card(customer_id, card_no, expire, security_code, holder_name):
+    """顧客にカードを登録する"""
+    url = f"{FINCODE_BASE_URL}/customers/{customer_id}/cards"
+    data = {
+        "default_flag": "1",
+        "token": None, # 本番環境ではJSでトークン化することを推奨
+        "card_no": card_no,
+        "expire": expire,
+        "security_code": security_code,
+        "holder_name": holder_name
+    }
+    response = requests.post(url, json=data, headers=HEADERS)
+    return response.json()
+
+def fincode_execute_payment(customer_id, amount):
+    """登録済みカードで決済を実行する"""
+    # 1. 決済作成
+    url_create = f"{FINCODE_BASE_URL}/payments"
+    data_create = {
+        "pay_type": "Card",
+        "job_code": "CAPTURE",
+        "amount": amount,
+        "customer_id": customer_id
+    }
+    res_create = requests.post(url_create, json=data_create, headers=HEADERS).json()
+    
+    if "errors" in res_create:
+        return False, res_create["errors"][0]["error_message"]
+    
+    access_id = res_create.get("access_id")
+    payment_id = res_create.get("id")
+
+    if not access_id or not payment_id:
+        return False, "決済IDの取得に失敗しました"
+
+    # 2. 決済実行
+    url_exec = f"{FINCODE_BASE_URL}/payments/{payment_id}"
+    data_exec = {
+        "access_id": access_id,
+        "pay_type": "Card",
+        "method": "1"
+    }
+    res_exec = requests.put(url_exec, json=data_exec, headers=HEADERS).json()
+    
+    if "errors" in res_exec:
+        return False, res_exec["errors"][0]["error_message"]
+        
+    return True, "決済が完了しました"
+
 # --- ユーザー管理 ---
 def hash_password(password):
     return hashlib.sha256(str(password).encode('utf-8')).hexdigest()
@@ -87,8 +163,9 @@ def ensure_users_sheet(client):
         try:
             sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
-            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=3)
-            ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ']) 
+            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=4)
+            # D列に fincode_customer_id を追加
+            ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id']) 
     except Exception as e:
         st.error(f"ユーザーDB初期化エラー: {e}")
 
@@ -101,17 +178,25 @@ def get_users_df(_client):
             sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
             data = sheet.get_all_values()
             if len(data) < 2:
-                return pd.DataFrame(columns=['ユーザーID', 'ユーザー名', 'パスワードハッシュ'])
-            return pd.DataFrame(data[1:], columns=data[0]).astype(str)
+                return pd.DataFrame(columns=['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id'])
+            
+            # ヘッダーとデータを取得
+            df = pd.DataFrame(data[1:], columns=data[0]).astype(str)
+            
+            # fincode_customer_idカラムがない場合の互換性処理
+            if 'fincode_customer_id' not in df.columns:
+                df['fincode_customer_id'] = ""
+                
+            return df
         except APIError as e:
             if "429" in str(e) and i < max_retries - 1:
                 time.sleep(2 ** i)
                 continue
             st.error(f"ユーザー情報取得エラー: {e}")
-            return pd.DataFrame(columns=['ユーザーID', 'ユーザー名', 'パスワードハッシュ'])
+            return pd.DataFrame(columns=['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id'])
         except Exception as e:
             st.error(f"エラー: {e}")
-            return pd.DataFrame(columns=['ユーザーID', 'ユーザー名', 'パスワードハッシュ'])
+            return pd.DataFrame(columns=['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id'])
 
 def register_user(client, user_id, user_name, password):
     get_users_df.clear() # キャッシュクリア
@@ -124,7 +209,8 @@ def register_user(client, user_id, user_name, password):
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         hashed_pw = hash_password(password)
-        sheet.append_row([str(user_id), str(user_name), hashed_pw])
+        # 4列目は空文字で登録
+        sheet.append_row([str(user_id), str(user_name), hashed_pw, ""])
         get_users_df.clear()
         return True, "登録が完了しました。ログインしてください。"
     except Exception as e:
@@ -146,6 +232,21 @@ def login_user(client, login_input, password):
         return True, "ログイン成功", user_id, user_name
     else:
         return False, "パスワードが間違っています。", "", ""
+
+def update_user_fincode_id(client, user_id, fincode_id):
+    """ユーザー管理シートにFincode IDを書き込む"""
+    try:
+        sh = client.open_by_key(SPREADSHEET_ID)
+        ws = sh.worksheet(USERS_SHEET_NAME)
+        cell = ws.find(str(user_id))
+        if cell:
+            # D列(4列目)にIDを保存
+            ws.update_cell(cell.row, 4, fincode_id)
+            get_users_df.clear()
+            return True
+    except Exception as e:
+        st.error(f"DB更新エラー: {e}")
+        return False
 
 # --- 管理シート（選択肢）の取得 ---
 @st.cache_data(ttl=60)
@@ -319,11 +420,9 @@ def main():
             st.subheader("新規登録")
             st.info("※ 通知を送るためにDiscordのユーザーID（数字の羅列）が必要です。")
             
-            # --- 【追加】わかりやすいID取得手順 ---
             with st.expander("❓ DiscordユーザーIDの取得方法がわからない方はこちら"):
                 st.markdown("""
                 DiscordのIDを取得するには「開発者モード」をONにする必要があります。
-                
                 1. **設定を開く**: 左下の歯車アイコン（ユーザー設定）をクリック
                 2. **詳細設定**: 左メニューの「アプリの設定」カテゴリにある「詳細設定」をクリック
                 3. **開発者モードON**: 「開発者モード」のスイッチを **ON** にする
@@ -332,7 +431,6 @@ def main():
                     * メニューの一番下にある **「ユーザーIDをコピー」** をクリック
                 5. コピーした数字（例: `123456789012345678`）を下の入力欄に貼り付けてください。
                 """)
-            # -----------------------------------
 
             r_id = st.text_input("DiscordユーザーID (必須)", key="reg_id", help="開発者モードをONにして、アイコン右クリックでコピーできます")
             r_name = st.text_input("ユーザー名 (表示用)", key="reg_name")
@@ -359,6 +457,10 @@ def main():
     
     with st.sidebar:
         st.write(f"ユーザー: **{current_user_name}**")
+        
+        # ★ メニューの切り替え
+        menu = st.radio("メニュー", ["通知設定", "プラン契約・決済"])
+
         st.caption(f"ID: {current_user_id}")
         if st.button("ログアウト"):
             st.session_state['logged_in_user_id'] = None
@@ -369,76 +471,155 @@ def main():
     if full_df is None:
         return
 
-    # 管理シートから選択肢を取得
-    choices_df = get_choices_df(client)
-    if not choices_df.empty:
-        valid_pairs = choices_df[['サイト', 'カテゴリ']].drop_duplicates()
-        valid_options = sorted([
-            f"{r['サイト']} - {r['カテゴリ']}" 
-            for _, r in valid_pairs.iterrows() 
-            if r['サイト'] and r['カテゴリ']
-        ])
-    else:
-        valid_options = []
+    # =================================================
+    # 通知設定画面
+    # =================================================
+    if menu == "通知設定":
+        # 管理シートから選択肢を取得
+        choices_df = get_choices_df(client)
+        if not choices_df.empty:
+            valid_pairs = choices_df[['サイト', 'カテゴリ']].drop_duplicates()
+            valid_options = sorted([
+                f"{r['サイト']} - {r['カテゴリ']}" 
+                for _, r in valid_pairs.iterrows() 
+                if r['サイト'] and r['カテゴリ']
+            ])
+        else:
+            valid_options = []
 
-    user_df = full_df[full_df['ユーザーID'] == str(current_user_id)].copy()
+        user_df = full_df[full_df['ユーザーID'] == str(current_user_id)].copy()
 
-    if '検索条件' in user_df.columns:
-        display_df = user_df[['検索条件', 'ブランドキーワード']].copy()
-    else:
-        display_df = pd.DataFrame(columns=['検索条件', 'ブランドキーワード'])
+        if '検索条件' in user_df.columns:
+            display_df = user_df[['検索条件', 'ブランドキーワード']].copy()
+        else:
+            display_df = pd.DataFrame(columns=['検索条件', 'ブランドキーワード'])
 
-    display_df.index = range(1, len(display_df) + 1)
+        display_df.index = range(1, len(display_df) + 1)
 
-    st.markdown(f"### {current_user_name} さんの通知設定")
-    
-    # メンション通知の案内
-    st.info(f"📢 **ここに登録した条件に一致する商品が見つかると、あなたのDiscord ID ({current_user_id}) 宛にメンション通知が届きます。**")
+        st.markdown(f"### {current_user_name} さんの通知設定")
+        st.info(f"📢 **ここに登録した条件に一致する商品が見つかると、あなたのDiscord ID ({current_user_id}) 宛にメンション通知が届きます。**")
 
-    if not valid_options:
-        st.warning("⚠️ 「管理」シートに選択肢がありません。データを確認してください。")
+        if not valid_options:
+            st.warning("⚠️ 「管理」シートに選択肢がありません。データを確認してください。")
 
-    column_config = {
-        "_index": st.column_config.NumberColumn("No.", disabled=True),
-        "検索条件": st.column_config.SelectboxColumn(
-            "検索条件 (サイト - カテゴリ)",
-            options=valid_options,
-            required=True,
-            width="medium",
-        ),
-        "ブランドキーワード": st.column_config.TextColumn(
-            "ブランドキーワード",
-            help="空欄ならカテゴリ全通知"
-        ),
-    }
+        column_config = {
+            "_index": st.column_config.NumberColumn("No.", disabled=True),
+            "検索条件": st.column_config.SelectboxColumn(
+                "検索条件 (サイト - カテゴリ)",
+                options=valid_options,
+                required=True,
+                width="medium",
+            ),
+            "ブランドキーワード": st.column_config.TextColumn(
+                "ブランドキーワード",
+                help="空欄ならカテゴリ全通知"
+            ),
+        }
 
-    edited_display_df = st.data_editor(
-        display_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config=column_config,
-        key="user_editor",
-    )
+        edited_display_df = st.data_editor(
+            display_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config=column_config,
+            key="user_editor",
+        )
 
-    col1, col2 = st.columns([1, 4])
-    with col1:
-        if st.button("💾 変更を保存", type="primary"):
-            valid_entries = edited_display_df[edited_display_df['検索条件'].notna() & (edited_display_df['検索条件'] != "")]
-            if valid_entries['検索条件'].duplicated().any():
-                duplicates = valid_entries[valid_entries['検索条件'].duplicated()]['検索条件'].unique()
-                st.error(f"⚠️ 重複エラー: 以下を1つにまとめてください。\n\n" + ", ".join(duplicates))
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("💾 変更を保存", type="primary"):
+                valid_entries = edited_display_df[edited_display_df['検索条件'].notna() & (edited_display_df['検索条件'] != "")]
+                if valid_entries['検索条件'].duplicated().any():
+                    duplicates = valid_entries[valid_entries['検索条件'].duplicated()]['検索条件'].unique()
+                    st.error(f"⚠️ 重複エラー: 以下を1つにまとめてください。\n\n" + ", ".join(duplicates))
+                else:
+                    new_full_df = save_merged_data(client, full_df, edited_display_df, current_user_id)
+                    if new_full_df is not None:
+                        st.session_state.df = new_full_df
+                        st.rerun()
+
+        with col2:
+            if st.button("🔄 最新データを再読み込み"):
+                load_data.clear()
+                get_choices_df.clear()
+                get_users_df.clear()
+                st.rerun()
+
+    # =================================================
+    # 決済画面
+    # =================================================
+    elif menu == "プラン契約・決済":
+        st.markdown("### 💳 プラン契約")
+        st.info("月額プランの支払いに使用するクレジットカードを登録・決済します。")
+        
+        # 簡易的な決済フォーム
+        with st.form("payment_form"):
+            col_card1, col_card2 = st.columns(2)
+            with col_card1:
+                card_no = st.text_input("カード番号", max_chars=16, placeholder="半角数字のみ (ハイフンなし)")
+            with col_card2:
+                holder = st.text_input("カード名義", placeholder="TARO YAMADA")
+            
+            col_date, col_cvc = st.columns(2)
+            with col_date:
+                expire = st.text_input("有効期限 (YYMM)", max_chars=4, placeholder="例: 2512 (2025年12月)")
+            with col_cvc:
+                cvc = st.text_input("セキュリティコード", type="password", max_chars=4)
+            
+            amount = 1000  # 決済金額（必要に応じて変更してください）
+            st.write(f"**決済金額: ¥{amount}**")
+            
+            submit_payment = st.form_submit_button("カードを登録して支払う")
+
+        if submit_payment:
+            if not (card_no and holder and expire and cvc):
+                st.error("全ての項目を入力してください。")
             else:
-                new_full_df = save_merged_data(client, full_df, edited_display_df, current_user_id)
-                if new_full_df is not None:
-                    st.session_state.df = new_full_df
-                    st.rerun()
-
-    with col2:
-        if st.button("🔄 最新データを再読み込み"):
-            load_data.clear()
-            get_choices_df.clear()
-            get_users_df.clear()
-            st.rerun()
+                if not FINCODE_API_KEY:
+                    st.error("システムエラー: 決済APIキーが設定されていません。")
+                    st.stop()
+                    
+                with st.spinner("決済処理中..."):
+                    # 1. DBからFincodeIDを確認
+                    users_df = get_users_df(client)
+                    user_row = users_df[users_df['ユーザーID'] == str(current_user_id)].iloc[0]
+                    
+                    # カラムが存在しない場合のエラー回避
+                    f_cust_id = ""
+                    if 'fincode_customer_id' in users_df.columns:
+                        f_cust_id = str(user_row.get('fincode_customer_id', ''))
+                    
+                    # 2. 顧客IDがない場合、Fincodeに新規作成
+                    if not f_cust_id or f_cust_id == "nan" or f_cust_id == "None" or f_cust_id == "":
+                        res_cust = fincode_register_customer(current_user_id)
+                        if "errors" in res_cust:
+                            st.error(f"顧客登録エラー: {res_cust['errors'][0]['error_message']}")
+                            st.stop()
+                        
+                        f_cust_id = res_cust.get("id")
+                        if not f_cust_id:
+                            st.error("顧客IDの取得に失敗しました。")
+                            st.stop()
+                            
+                        # スプレッドシートにIDを保存
+                        if update_user_fincode_id(client, current_user_id, f_cust_id):
+                            st.info("顧客情報を新規作成しました。")
+                        else:
+                            st.error("データベースへのID保存に失敗しました。")
+                            st.stop()
+                    
+                    # 3. カード登録
+                    res_card = fincode_register_card(f_cust_id, card_no, expire, cvc, holder)
+                    if "errors" in res_card:
+                        st.error(f"カード登録エラー: {res_card['errors'][0]['error_message']}")
+                    else:
+                        # 4. 決済実行
+                        success, msg = fincode_execute_payment(f_cust_id, amount)
+                        if success:
+                            st.success("🎉 支払いが完了しました！")
+                            st.balloons()
+                            # 成功ログなどを残す場合はここに記述
+                        else:
+                            st.error(f"決済エラー: {msg}")
 
 if __name__ == "__main__":
     main()
