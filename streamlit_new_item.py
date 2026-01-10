@@ -6,7 +6,7 @@ import hashlib
 import json
 import time
 import requests
-from datetime import datetime # ★追加：日付を扱うため
+from datetime import datetime, timedelta, timezone # ★日本時間対応用
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -23,7 +23,7 @@ TARGET_SHEET_NAME = "ユーザー設定"
 USERS_SHEET_NAME = "ユーザー管理"
 CHOICES_SHEET_NAME = "管理"
 
-# ★ プラン設定（FincodeのプランIDと合わせる）
+# ★ プラン設定
 PLANS = {
     "full": {
         "name": "フルプラン (アパレル・その他)",
@@ -132,19 +132,25 @@ def fincode_create_subscription(customer_id, plan_id):
     """サブスクリプションを開始する"""
     url = f"{FINCODE_BASE_URL}/subscriptions"
     
-    # ★修正箇所：今日の日付を取得して設定
-    today_str = datetime.now().strftime('%Y/%m/%d')
+    # ★修正：日本時間(JST)で今日の日付を取得する
+    JST = timezone(timedelta(hours=9))
+    today_str = datetime.now(JST).strftime('%Y/%m/%d')
     
     data = {
         "pay_type": "Card",
         "plan_id": plan_id,
         "customer_id": customer_id,
-        "start_date": today_str # ★ここで今日の日付を指定
+        "start_date": today_str
     }
+    
+    # API送信
     res = requests.post(url, json=data, headers=HEADERS).json()
+    
     if "errors" in res:
-        return False, res["errors"][0]["error_message"]
-    return True, res["id"]
+        # エラー時は詳細情報も一緒に返す
+        return False, res["errors"][0]["error_message"], data, res
+    
+    return True, res["id"], data, res
 
 def fincode_cancel_subscription(subscription_id):
     """サブスクリプションを解約する"""
@@ -161,7 +167,6 @@ def hash_password(password):
     return hashlib.sha256(str(password).encode('utf-8')).hexdigest()
 
 def ensure_users_sheet(client):
-    """ユーザー管理シートの初期化（F列まで確保）"""
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
         try:
@@ -226,18 +231,17 @@ def login_user(client, login_input, password):
         return False, "パスワードが間違っています。", "", ""
 
 def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=None, plan_id=None):
-    """DB上のFincode関連情報を更新する"""
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
         ws = sh.worksheet(USERS_SHEET_NAME)
         cell = ws.find(str(user_id))
         if cell:
             if fincode_id is not None:
-                ws.update_cell(cell.row, 4, fincode_id) # D列
+                ws.update_cell(cell.row, 4, fincode_id)
             if subscription_id is not None:
-                ws.update_cell(cell.row, 5, subscription_id) # E列
+                ws.update_cell(cell.row, 5, subscription_id)
             if plan_id is not None:
-                ws.update_cell(cell.row, 6, plan_id) # F列
+                ws.update_cell(cell.row, 6, plan_id)
             
             get_users_df.clear()
             return True
@@ -359,9 +363,6 @@ def main():
     current_plan_id = str(user_row.get('plan_id', ''))
     is_subscribed = (sub_id != "" and sub_id.lower() != "nan" and sub_id.lower() != "none")
 
-    # ---------------------------
-    #  メニュー1: 通知設定
-    # ---------------------------
     if menu == "通知設定":
         choices_df = get_choices_df(client)
         opts = sorted([f"{r['サイト']} - {r['カテゴリ']}" for _, r in choices_df.drop_duplicates().iterrows() if r['サイト']]) if not choices_df.empty else []
@@ -370,14 +371,11 @@ def main():
         display_df = user_df[['検索条件', 'ブランドキーワード']] if '検索条件' in user_df.columns else pd.DataFrame(columns=['検索条件', 'ブランドキーワード'])
         
         st.subheader("📢 通知条件の設定")
-        
         if is_subscribed:
-            if current_plan_id == PLANS["full"]["id"]:
-                st.info("💎 **フルプラン契約中**: 全てのカテゴリを設定可能です。")
-            elif current_plan_id == PLANS["light"]["id"]:
-                st.info("💡 **ライトプラン契約中**: 設定内容にご注意ください。")
+            if current_plan_id == PLANS["full"]["id"]: st.info("💎 **フルプラン契約中**")
+            elif current_plan_id == PLANS["light"]["id"]: st.info("💡 **ライトプラン契約中**")
         else:
-            st.warning("⚠️ プラン未契約です。通知を受け取るには契約が必要です。")
+            st.warning("⚠️ プラン未契約です")
 
         edited = st.data_editor(display_df, num_rows="dynamic", use_container_width=True, 
                                 column_config={"検索条件": st.column_config.SelectboxColumn(options=opts, required=True)})
@@ -385,9 +383,6 @@ def main():
         if st.button("設定を保存", type="primary"):
             save_merged_data(client, full_df, edited, uid)
 
-    # ---------------------------
-    #  メニュー2: サブスク契約・解約
-    # ---------------------------
     elif menu == "プラン契約・解約":
         st.subheader("💳 サブスクリプション管理")
         
@@ -438,6 +433,7 @@ def main():
                         st.stop()
 
                     with st.spinner("処理中..."):
+                        # 1. 顧客ID
                         f_cust_id = str(user_row.get('fincode_customer_id', ''))
                         if f_cust_id in ["", "nan", "None"]:
                             res = fincode_register_customer(uid)
@@ -447,19 +443,27 @@ def main():
                             f_cust_id = res["id"]
                             update_user_fincode_data(client, uid, fincode_id=f_cust_id)
 
+                        # 2. カード登録
                         res_card = fincode_register_card(f_cust_id, card_no, expire, cvc, holder)
                         if "errors" in res_card:
                             st.error(f"カード登録エラー: {res_card['errors'][0]['error_message']}")
                         else:
-                            suc, res_sub_id = fincode_create_subscription(f_cust_id, selected_plan["id"])
+                            # 3. サブスク開始 (デバッグログ対応)
+                            suc, res_sub, req_data, res_raw = fincode_create_subscription(f_cust_id, selected_plan["id"])
                             if suc:
-                                update_user_fincode_data(client, uid, subscription_id=res_sub_id, plan_id=selected_plan["id"])
+                                update_user_fincode_data(client, uid, subscription_id=res_sub, plan_id=selected_plan["id"])
                                 st.balloons()
                                 st.success("サブスクリプションを開始しました！")
                                 time.sleep(2)
                                 st.rerun()
                             else:
-                                st.error(f"契約エラー: {res_sub_id}")
+                                # ★ここでエラー詳細を表示
+                                st.error(f"契約エラー: {res_sub}")
+                                with st.expander("🛠 デバッグ用ログ (詳細)"):
+                                    st.write("▼ 送信データ (Request)")
+                                    st.json(req_data)
+                                    st.write("▼ 受信データ (Response)")
+                                    st.json(res_raw)
 
 if __name__ == "__main__":
     main()
