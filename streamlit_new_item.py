@@ -105,6 +105,29 @@ def get_gspread_client():
     return None
 
 # ==========================================
+#  特定商取引法に基づく表記 (審査用)
+# ==========================================
+def show_tokushoho():
+    """審査通過に必要な法的情報を表示する"""
+    st.markdown("---")
+    with st.expander("⚖️ 特定商取引法に基づく表記（審査用）"):
+        st.markdown("""
+        | 項目 | 内容 |
+        | :--- | :--- |
+        | **販売業者** | 齋藤 航太 |
+        | **代表責任者** | 齋藤 航太 |
+        | **所在地** | 〒154-0000 東京都世田谷区... (※ここを正確な住所に書き換えてください) |
+        | **電話番号** | 090-xxxx-xxxx (※ここを連絡が取れる番号に書き換えてください) |
+        | **メールアドレス** | your_email@example.com (※ここをメールアドレスに書き換えてください) |
+        | **販売価格** | プラン契約画面に記載 (月額5,000円 / 9,000円) |
+        | **商品代金以外の必要料金** | なし（インターネット接続料金はお客様負担） |
+        | **支払方法** | クレジットカード決済 |
+        | **支払時期** | 初回契約時および毎月同日に請求 |
+        | **商品の引渡時期** | 決済完了後、即時利用可能 |
+        | **返品・交換** | デジタルコンテンツの性質上、返品・返金には応じられません。<br>解約はいつでもマイページから可能です（次回請求分から停止）。 |
+        """)
+
+# ==========================================
 #  Fincode API連携関数
 # ==========================================
 def fincode_register_customer(user_id):
@@ -132,7 +155,7 @@ def fincode_create_subscription(customer_id, plan_id):
     """サブスクリプションを開始する"""
     url = f"{FINCODE_BASE_URL}/subscriptions"
     
-    # ★修正：日本時間(JST)で今日の日付を取得する
+    # 日本時間(JST)で今日の日付を取得する
     JST = timezone(timedelta(hours=9))
     today_str = datetime.now(JST).strftime('%Y/%m/%d')
     
@@ -342,6 +365,10 @@ def main():
                 suc, msg = register_user(client, r_id, r_name, r_pass)
                 if suc: st.success(msg)
                 else: st.error(msg)
+        
+        # ★★★ 審査用：特定商取引法に基づく表記の表示 ★★★
+        show_tokushoho()
+        
         st.stop()
 
     # --- ログイン後 ---
@@ -416,10 +443,11 @@ def main():
             with st.form("pay_form"):
                 st.write("クレジットカード情報")
                 c1, c2 = st.columns(2)
-                card_no = c1.text_input("カード番号", max_chars=16, placeholder="4111111111111111")
-                holder = c2.text_input("名義", placeholder="TARO TEST")
+                # ★修正：本番用に一般的なプレースホルダーに変更
+                card_no = c1.text_input("カード番号", max_chars=16, placeholder="1234567812345678")
+                holder = c2.text_input("名義", placeholder="TARO YAMADA")
                 c3, c4 = st.columns(2)
-                expire = c3.text_input("有効期限 (YYMM)", max_chars=4, placeholder="2912")
+                expire = c3.text_input("有効期限 (YYMM)", max_chars=4, placeholder="2512")
                 cvc = c4.text_input("セキュリティコード", type="password", max_chars=4)
                 
                 submitted = st.form_submit_button(f"¥{selected_plan['price']:,} で定期購読を開始")
@@ -457,13 +485,4 @@ def main():
                                 time.sleep(2)
                                 st.rerun()
                             else:
-                                # ★ここでエラー詳細を表示
                                 st.error(f"契約エラー: {res_sub}")
-                                with st.expander("🛠 デバッグ用ログ (詳細)"):
-                                    st.write("▼ 送信データ (Request)")
-                                    st.json(req_data)
-                                    st.write("▼ 受信データ (Response)")
-                                    st.json(res_raw)
-
-if __name__ == "__main__":
-    main()
