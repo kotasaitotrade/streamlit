@@ -615,7 +615,7 @@ def main():
                 
                 submitted = st.form_submit_button(f"¥{final_price:,} で定期購読を開始")
             
-            if submitted:
+if submitted:
                 if not (card_no and holder and expire and cvc):
                     st.error("全ての項目を入力してください")
                 else:
@@ -624,19 +624,35 @@ def main():
                         st.stop()
 
                     with st.spinner("処理中..."):
+                        # 1. 顧客IDの取得・作成
                         f_cust_id = str(user_row.get('fincode_customer_id', ''))
+                        
+                        # シートにIDがない場合、Fincodeに登録を試みる
                         if f_cust_id in ["", "nan", "None"]:
                             res = fincode_register_customer(uid)
+                            
                             if "errors" in res:
-                                st.error(res["errors"][0]["error_message"])
-                                st.stop()
-                            f_cust_id = res["id"]
-                            update_user_fincode_data(client, uid, fincode_id=f_cust_id)
+                                error_msg = res["errors"][0]["error_message"]
+                                # ★修正: 「既に登録されています」エラーなら、既存のID(uid)をそのまま使う
+                                if "既に登録" in error_msg or "exist" in error_msg.lower():
+                                    f_cust_id = str(uid)
+                                    # シート側も更新しておく
+                                    update_user_fincode_data(client, uid, fincode_id=f_cust_id)
+                                else:
+                                    # それ以外の本当のエラーなら停止
+                                    st.error(error_msg)
+                                    st.stop()
+                            else:
+                                # 新規登録成功
+                                f_cust_id = res["id"]
+                                update_user_fincode_data(client, uid, fincode_id=f_cust_id)
 
+                        # 2. カード登録
                         res_card = fincode_register_card(f_cust_id, card_no, expire, cvc, holder)
                         if "errors" in res_card:
                             st.error(f"カード登録エラー: {res_card['errors'][0]['error_message']}")
                         else:
+                            # 3. サブスク開始
                             suc, res_sub, req_data, res_raw = fincode_create_subscription(f_cust_id, target_plan_id)
                             if suc:
                                 update_user_fincode_data(client, uid, subscription_id=res_sub, plan_id=target_plan_id, restriction_type=selected_restriction)
