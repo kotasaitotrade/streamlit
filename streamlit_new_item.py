@@ -40,7 +40,7 @@ PLANS = {
         "type": "all",
         "base_price": 9000,
         "base_id": "plan_9000",      # Fincodeの9000円プランID
-        "opt_id": "plan_11000"       # ★Fincodeで作った11000円プランID
+        "opt_id": "plan_11000"       # Fincodeの11000円プランID
     },
     "light": {
         "name": "ライトプラン (片方のみ)",
@@ -48,7 +48,7 @@ PLANS = {
         "type": "select",
         "base_price": 5000,
         "base_id": "plan_5000",      # Fincodeの5000円プランID
-        "opt_id": "plan_7000"        # ★Fincodeで作った7000円プランID
+        "opt_id": "plan_7000"        # Fincodeの7000円プランID
     }
 }
 
@@ -332,14 +332,13 @@ def load_data(_client):
     try:
         sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(TARGET_SHEET_NAME)
         data = sheet.get_all_values()
-        # ★ キーワード列の名前変更
         final_cols = ['ユーザーID', '検索条件', 'キーワード']
         if not data: return pd.DataFrame(columns=final_cols)
         df = pd.DataFrame(data[1:], columns=data[0]).astype(str)
         if 'サイト' in df.columns:
             if '検索条件' not in df.columns: df['検索条件'] = df['サイト'] + " - " + df['カテゴリ']
         
-        # 旧カラム「ブランドキーワード」がある場合の移行処理（読み込み時）
+        # 旧カラム対応
         if 'ブランドキーワード' in df.columns and 'キーワード' not in df.columns:
             df['キーワード'] = df['ブランドキーワード']
             
@@ -359,7 +358,6 @@ def validate_keywords(df):
 
 def save_merged_data(client, full_df, edited_display_df, user_id):
     try:
-        # バリデーション
         is_valid, err_msg = validate_keywords(edited_display_df)
         if not is_valid:
             st.error(err_msg)
@@ -457,7 +455,6 @@ def main():
 
     is_subscribed = (sub_id != "" and sub_id.lower() != "nan" and sub_id.lower() != "none")
 
-    # オプション加入判定（オプション込みIDのリストに含まれているか）
     opt_ids = [PLANS["full"]["opt_id"], PLANS["light"]["opt_id"]]
     has_option = (current_plan_id in opt_ids)
 
@@ -479,7 +476,6 @@ def main():
             st.stop()
 
         choices_df = get_choices_df(client)
-        
         allowed_opts = []
         if not choices_df.empty:
             for _, row in choices_df.drop_duplicates().iterrows():
@@ -493,7 +489,6 @@ def main():
         display_df = user_df[['検索条件', 'キーワード']] if '検索条件' in user_df.columns else pd.DataFrame(columns=['検索条件', 'キーワード'])
         
         # プラン情報の表示
-        plan_display_name = "プラン不明"
         if current_plan_id.startswith(PLANS["full"]["base_id"]) or current_plan_id == PLANS["full"]["opt_id"]:
              st.info("💎 **フルプラン契約中**")
         elif current_plan_id.startswith(PLANS["light"]["base_id"]) or current_plan_id == PLANS["light"]["opt_id"]:
@@ -504,10 +499,10 @@ def main():
         # オプション情報の表示
         if has_option:
             st.success("✅ **キーワード通知オプション: 有効**")
-            st.caption("商品名、ブランド、型番のいずれかにキーワードが含まれる場合に通知します。（カンマ区切りで複数指定可）")
+            st.caption("商品名、ブランド、型番のいずれかに設定したキーワード（最大10単語）が含まれる商品のみを通知します。")
         else:
             st.warning("🔒 **キーワード通知オプション: 無効**")
-            st.caption("この機能を利用するには、プラン契約・変更画面でオプションを追加してください。")
+            st.caption("現在、キーワードによる絞り込み機能は利用できません。ご希望の場合はプラン契約画面からオプションを追加してください。")
 
         with st.expander("📡 あなたの通知チャンネル"):
             if channel_url:
@@ -516,7 +511,7 @@ def main():
             else:
                 st.warning("⚠️ チャンネル情報が登録されていません。")
 
-        # データエディタ (オプション未加入ならキーワード列を編集不可に)
+        # データエディタ
         edited = st.data_editor(
             display_df, 
             num_rows="dynamic", 
@@ -528,7 +523,7 @@ def main():
                 ),
                 "キーワード": st.column_config.TextColumn(
                     "キーワード (最大10個)",
-                    disabled=(not has_option), # オプションなしなら編集不可
+                    disabled=(not has_option),
                     help="カンマ(,)区切りで入力。商品名・ブランド・型番のいずれかに一致したら通知。"
                 )
             }
@@ -542,13 +537,9 @@ def main():
         
         if is_subscribed:
             st.success("✅ **現在プラン契約中です**")
-            # プラン名の解決
             plan_name = "不明なプラン"
-            
-            # フルプラン判定
             if current_plan_id == PLANS["full"]["base_id"]: plan_name = PLANS["full"]["name"]
             elif current_plan_id == PLANS["full"]["opt_id"]: plan_name = f"{PLANS['full']['name']} + オプション"
-            # ライトプラン判定
             elif current_plan_id == PLANS["light"]["base_id"]: plan_name = PLANS["light"]["name"]
             elif current_plan_id == PLANS["light"]["opt_id"]: plan_name = f"{PLANS['light']['name']} + オプション"
 
@@ -576,7 +567,6 @@ def main():
             plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['base_price']:,}/月")
             selected_plan = PLANS[plan_key]
             
-            # --- ライトプランの制限選択 ---
             selected_restriction = "all"
             if plan_key == "light":
                 st.markdown("👇 **通知を受け取るカテゴリを選択してください**")
@@ -587,15 +577,19 @@ def main():
                 )
                 selected_restriction = sub_choice
             
-            # --- ★ オプション選択 ---
             st.markdown("---")
             use_option = st.checkbox(f"✨ **キーワード通知オプションを追加する (+¥{OPTION_PRICE:,})**")
-            if use_option:
-                st.caption("✅ 指定したキーワード（商品名・ブランド・型番）が含まれる商品だけを通知できます。")
-            else:
-                st.caption("通常のカテゴリ通知のみ行います。")
             
-            # --- 合計金額計算 ---
+            # ★★★ 説明文（常時表示） ★★★
+            st.caption("""
+            **【オプション機能説明】**
+            サイトから抽出した **商品名、ブランド、型番** の中に、設定したキーワード（カンマ区切りで最大10単語）と一致する文字列がある商品だけを通知するフィルタリング機能です。
+            
+            * ✅ **チェックあり:** キーワードにヒットした商品のみ通知されます。
+            * ⬜ **チェックなし:** カテゴリ内の新着商品はすべて通知されます。
+            """)
+            # ★★★★★★★★★★★★★★★★★★
+
             final_price = selected_plan['base_price'] + (OPTION_PRICE if use_option else 0)
             target_plan_id = selected_plan['opt_id'] if use_option else selected_plan['base_id']
 
@@ -643,7 +637,6 @@ def main():
                         if "errors" in res_card:
                             st.error(f"カード登録エラー: {res_card['errors'][0]['error_message']}")
                         else:
-                            # ★ 計算済みの target_plan_id を使用
                             suc, res_sub, req_data, res_raw = fincode_create_subscription(f_cust_id, target_plan_id)
                             if suc:
                                 update_user_fincode_data(client, uid, subscription_id=res_sub, plan_id=target_plan_id, restriction_type=selected_restriction)
