@@ -31,21 +31,24 @@ except Exception:
     DISCORD_BOT_TOKEN = ""
     DISCORD_GUILD_ID = ""
 
-# ★ プラン設定
+# ★ プラン設定（FincodeのプランIDに合わせて修正してください）
+OPTION_PRICE = 2000
 PLANS = {
     "full": {
         "name": "フルプラン (全て)",
-        "id": "plan_9000",
-        "price": 9000,
         "desc": "アパレル・その他の全てのカテゴリを選択可能",
-        "type": "all"
+        "type": "all",
+        "base_price": 9000,
+        "base_id": "plan_9000",      # Fincodeの9000円プランID
+        "opt_id": "plan_11000"       # ★Fincodeで作った11000円プランID
     },
     "light": {
         "name": "ライトプラン (片方のみ)",
-        "id": "plan_5000",
-        "price": 5000,
         "desc": "「アパレル」または「それ以外」のどちらか一方のみ選択可能",
-        "type": "select" 
+        "type": "select",
+        "base_price": 5000,
+        "base_id": "plan_5000",      # Fincodeの5000円プランID
+        "opt_id": "plan_7000"        # ★Fincodeで作った7000円プランID
     }
 }
 
@@ -329,29 +332,50 @@ def load_data(_client):
     try:
         sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(TARGET_SHEET_NAME)
         data = sheet.get_all_values()
-        final_cols = ['ユーザーID', '検索条件', 'ブランドキーワード']
+        # ★ キーワード列の名前変更
+        final_cols = ['ユーザーID', '検索条件', 'キーワード']
         if not data: return pd.DataFrame(columns=final_cols)
         df = pd.DataFrame(data[1:], columns=data[0]).astype(str)
         if 'サイト' in df.columns:
             if '検索条件' not in df.columns: df['検索条件'] = df['サイト'] + " - " + df['カテゴリ']
+        
+        # 旧カラム「ブランドキーワード」がある場合の移行処理（読み込み時）
+        if 'ブランドキーワード' in df.columns and 'キーワード' not in df.columns:
+            df['キーワード'] = df['ブランドキーワード']
+            
         for col in final_cols:
             if col not in df.columns: df[col] = ""
         return df[final_cols]
     except: return None
 
+def validate_keywords(df):
+    """キーワードが10個以内かチェック"""
+    for index, row in df.iterrows():
+        kws = str(row['キーワード']).replace('、', ',').split(',')
+        kws = [k for k in kws if k.strip()]
+        if len(kws) > 10:
+            return False, f"エラー: {row['検索条件']} のキーワードが多すぎます（最大10単語まで）"
+    return True, ""
+
 def save_merged_data(client, full_df, edited_display_df, user_id):
     try:
+        # バリデーション
+        is_valid, err_msg = validate_keywords(edited_display_df)
+        if not is_valid:
+            st.error(err_msg)
+            return None
+
         new_rows = []
         for i, row in edited_display_df.iterrows():
             combo = row['検索条件']
-            keywords = row['ブランドキーワード']
+            keywords = row['キーワード']
             if not combo or not isinstance(combo, str): continue
-            new_rows.append({'ユーザーID': str(user_id), '検索条件': combo, 'ブランドキーワード': keywords})
+            new_rows.append({'ユーザーID': str(user_id), '検索条件': combo, 'キーワード': keywords})
         
         save_user_df = pd.DataFrame(new_rows)
         other_users_df = full_df[full_df['ユーザーID'] != str(user_id)]
         
-        cols = ['ユーザーID', '検索条件', 'ブランドキーワード']
+        cols = ['ユーザーID', '検索条件', 'キーワード']
         for c in cols:
             if c not in save_user_df.columns: save_user_df[c] = ""
             if c not in other_users_df.columns: other_users_df[c] = ""
@@ -433,6 +457,10 @@ def main():
 
     is_subscribed = (sub_id != "" and sub_id.lower() != "nan" and sub_id.lower() != "none")
 
+    # オプション加入判定（オプション込みIDのリストに含まれているか）
+    opt_ids = [PLANS["full"]["opt_id"], PLANS["light"]["opt_id"]]
+    has_option = (current_plan_id in opt_ids)
+
     with st.sidebar:
         st.write(f"User: **{uname}**")
         menu = st.radio("メニュー", ["通知設定", "プラン契約・解約"])
@@ -457,23 +485,30 @@ def main():
             for _, row in choices_df.drop_duplicates().iterrows():
                 combo_name = f"{row['サイト']} - {row['カテゴリ']}"
                 cat_type = get_category_type(row)
-                
-                if restriction_type == 'all':
-                    allowed_opts.append(combo_name)
-                elif restriction_type == cat_type:
-                    allowed_opts.append(combo_name)
-        
+                if restriction_type == 'all': allowed_opts.append(combo_name)
+                elif restriction_type == cat_type: allowed_opts.append(combo_name)
         allowed_opts = sorted(allowed_opts)
 
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
-        display_df = user_df[['検索条件', 'ブランドキーワード']] if '検索条件' in user_df.columns else pd.DataFrame(columns=['検索条件', 'ブランドキーワード'])
+        display_df = user_df[['検索条件', 'キーワード']] if '検索条件' in user_df.columns else pd.DataFrame(columns=['検索条件', 'キーワード'])
         
-        if current_plan_id == PLANS["full"]["id"]: st.info("💎 **フルプラン契約中**")
-        elif current_plan_id == PLANS["light"]["id"]: 
-            st.info("💡 **ライトプラン契約中**")
-            r_text = "👜 アパレルのみ" if restriction_type == "apparel" else "📷 アパレル以外のみ"
-            st.caption(f"選択可能カテゴリ: {r_text}")
-        
+        # プラン情報の表示
+        plan_display_name = "プラン不明"
+        if current_plan_id.startswith(PLANS["full"]["base_id"]) or current_plan_id == PLANS["full"]["opt_id"]:
+             st.info("💎 **フルプラン契約中**")
+        elif current_plan_id.startswith(PLANS["light"]["base_id"]) or current_plan_id == PLANS["light"]["opt_id"]:
+             st.info("💡 **ライトプラン契約中**")
+             r_text = "👜 アパレルのみ" if restriction_type == "apparel" else "📷 アパレル以外のみ"
+             st.caption(f"選択可能カテゴリ: {r_text}")
+
+        # オプション情報の表示
+        if has_option:
+            st.success("✅ **キーワード通知オプション: 有効**")
+            st.caption("商品名、ブランド、型番のいずれかにキーワードが含まれる場合に通知します。（カンマ区切りで複数指定可）")
+        else:
+            st.warning("🔒 **キーワード通知オプション: 無効**")
+            st.caption("この機能を利用するには、プラン契約・変更画面でオプションを追加してください。")
+
         with st.expander("📡 あなたの通知チャンネル"):
             if channel_url:
                 st.success("✅ Discord連携済み")
@@ -481,6 +516,7 @@ def main():
             else:
                 st.warning("⚠️ チャンネル情報が登録されていません。")
 
+        # データエディタ (オプション未加入ならキーワード列を編集不可に)
         edited = st.data_editor(
             display_df, 
             num_rows="dynamic", 
@@ -489,6 +525,11 @@ def main():
                 "検索条件": st.column_config.SelectboxColumn(
                     options=allowed_opts, 
                     required=True
+                ),
+                "キーワード": st.column_config.TextColumn(
+                    "キーワード (最大10個)",
+                    disabled=(not has_option), # オプションなしなら編集不可
+                    help="カンマ(,)区切りで入力。商品名・ブランド・型番のいずれかに一致したら通知。"
                 )
             }
         )
@@ -501,12 +542,19 @@ def main():
         
         if is_subscribed:
             st.success("✅ **現在プラン契約中です**")
+            # プラン名の解決
             plan_name = "不明なプラン"
-            if current_plan_id == PLANS["full"]["id"]: plan_name = PLANS["full"]["name"]
-            elif current_plan_id == PLANS["light"]["id"]: plan_name = PLANS["light"]["name"]
+            
+            # フルプラン判定
+            if current_plan_id == PLANS["full"]["base_id"]: plan_name = PLANS["full"]["name"]
+            elif current_plan_id == PLANS["full"]["opt_id"]: plan_name = f"{PLANS['full']['name']} + オプション"
+            # ライトプラン判定
+            elif current_plan_id == PLANS["light"]["base_id"]: plan_name = PLANS["light"]["name"]
+            elif current_plan_id == PLANS["light"]["opt_id"]: plan_name = f"{PLANS['light']['name']} + オプション"
+
             st.write(f"**契約プラン**: {plan_name}")
             
-            if current_plan_id == PLANS["light"]["id"]:
+            if "ライト" in plan_name:
                  r_text = "👜 アパレルのみ" if restriction_type == "apparel" else "📷 アパレル以外のみ"
                  st.write(f"**選択カテゴリ**: {r_text}")
             
@@ -525,13 +573,13 @@ def main():
                         st.error(f"解約エラー: {msg}")
         else:
             st.info("利用を開始するには、以下のプランから選択してください。")
-            plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['price']:,}/月")
+            plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['base_price']:,}/月")
             selected_plan = PLANS[plan_key]
             
+            # --- ライトプランの制限選択 ---
             selected_restriction = "all"
             if plan_key == "light":
                 st.markdown("👇 **通知を受け取るカテゴリを選択してください**")
-                # ★ 修正: 表示ラベルをシンプルに変更
                 sub_choice = st.radio(
                     "カテゴリ選択", 
                     ["apparel", "not_apparel"], 
@@ -539,11 +587,28 @@ def main():
                 )
                 selected_restriction = sub_choice
             
+            # --- ★ オプション選択 ---
+            st.markdown("---")
+            use_option = st.checkbox(f"✨ **キーワード通知オプションを追加する (+¥{OPTION_PRICE:,})**")
+            if use_option:
+                st.caption("✅ 指定したキーワード（商品名・ブランド・型番）が含まれる商品だけを通知できます。")
+            else:
+                st.caption("通常のカテゴリ通知のみ行います。")
+            
+            # --- 合計金額計算 ---
+            final_price = selected_plan['base_price'] + (OPTION_PRICE if use_option else 0)
+            target_plan_id = selected_plan['opt_id'] if use_option else selected_plan['base_id']
+
+            st.markdown("---")
             st.write(f"**選択中: {selected_plan['name']}**")
             if plan_key == "light":
-                # ★ 確認表示も合わせる
                 disp_text = "👜 アパレル" if selected_restriction == "apparel" else "📷 アパレル以外"
                 st.info(f"選択カテゴリ: {disp_text}")
+            
+            if use_option:
+                st.success(f"オプション適用: あり (+¥{OPTION_PRICE:,})")
+            
+            st.subheader(f"ご請求額: ¥{final_price:,} / 月")
             
             with st.form("pay_form"):
                 st.write("クレジットカード情報")
@@ -554,7 +619,7 @@ def main():
                 expire = c3.text_input("有効期限 (YYMM)", max_chars=4, placeholder="2512")
                 cvc = c4.text_input("セキュリティコード", type="password", max_chars=4)
                 
-                submitted = st.form_submit_button(f"¥{selected_plan['price']:,} で定期購読を開始")
+                submitted = st.form_submit_button(f"¥{final_price:,} で定期購読を開始")
             
             if submitted:
                 if not (card_no and holder and expire and cvc):
@@ -578,9 +643,10 @@ def main():
                         if "errors" in res_card:
                             st.error(f"カード登録エラー: {res_card['errors'][0]['error_message']}")
                         else:
-                            suc, res_sub, req_data, res_raw = fincode_create_subscription(f_cust_id, selected_plan["id"])
+                            # ★ 計算済みの target_plan_id を使用
+                            suc, res_sub, req_data, res_raw = fincode_create_subscription(f_cust_id, target_plan_id)
                             if suc:
-                                update_user_fincode_data(client, uid, subscription_id=res_sub, plan_id=selected_plan["id"], restriction_type=selected_restriction)
+                                update_user_fincode_data(client, uid, subscription_id=res_sub, plan_id=target_plan_id, restriction_type=selected_restriction)
                                 st.balloons()
                                 st.success("サブスクリプションを開始しました！")
                                 time.sleep(2)
