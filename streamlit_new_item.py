@@ -45,7 +45,7 @@ PLANS = {
         "id": "plan_5000",
         "price": 5000,
         "desc": "「アパレル」または「それ以外」のどちらか一方のみ選択可能",
-        "type": "select" # 画面で選択させる
+        "type": "select" 
     }
 }
 
@@ -232,7 +232,6 @@ def ensure_users_sheet(client):
             sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
             ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=8)
-            # ★ 列追加: チャンネルURL, 制限設定(category_restriction)
             ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', '制限設定']) 
     except Exception as e:
         st.error(f"ユーザーDB初期化エラー: {e}")
@@ -245,7 +244,6 @@ def get_users_df(_client):
         try:
             sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
             data = sheet.get_all_values()
-            # ★ 制限設定 列を追加
             cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', '制限設定']
             
             if len(data) < 2:
@@ -282,7 +280,6 @@ def register_user(client, user_id, user_name, password):
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         hashed_pw = hash_password(password)
-        # ★ 初期値として制限設定は空文字
         sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url, ""])
         get_users_df.clear()
         return True, "登録完了"
@@ -305,7 +302,6 @@ def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=N
             if fincode_id is not None: ws.update_cell(cell.row, 4, fincode_id)
             if subscription_id is not None: ws.update_cell(cell.row, 5, subscription_id)
             if plan_id is not None: ws.update_cell(cell.row, 6, plan_id)
-            # ★ 制限設定の更新 (8列目)
             if restriction_type is not None: ws.update_cell(cell.row, 8, restriction_type)
             
             get_users_df.clear()
@@ -372,12 +368,11 @@ def save_merged_data(client, full_df, edited_display_df, user_id):
         st.error(f"保存エラー: {e}")
         return None
 
-# ★ カテゴリ判定ロジック (Bot側と統一)
 def get_category_type(row_series):
     row_text = " ".join([str(v) for v in row_series.values])
     if "アパレル以外" in row_text: return "not_apparel"
     elif "アパレル" in row_text: return "apparel"
-    else: return "not_apparel" # デフォルト
+    else: return "not_apparel"
 
 # ==========================================
 #  メイン
@@ -433,7 +428,6 @@ def main():
     sub_id = str(user_row.get('subscription_id', ''))
     current_plan_id = str(user_row.get('plan_id', ''))
     channel_url = str(user_row.get('チャンネルURL', ''))
-    # ★ 制限設定を取得
     restriction_type = str(user_row.get('制限設定', 'all'))
     if not restriction_type: restriction_type = 'all'
 
@@ -458,22 +452,18 @@ def main():
 
         choices_df = get_choices_df(client)
         
-        # ★★★ 選択肢のフィルタリングロジック ★★★
         allowed_opts = []
         if not choices_df.empty:
             for _, row in choices_df.drop_duplicates().iterrows():
                 combo_name = f"{row['サイト']} - {row['カテゴリ']}"
-                cat_type = get_category_type(row) # 'apparel' or 'not_apparel'
+                cat_type = get_category_type(row)
                 
-                # 制限なし(all)なら全て追加
                 if restriction_type == 'all':
                     allowed_opts.append(combo_name)
-                # 制限ありなら一致するものだけ追加
                 elif restriction_type == cat_type:
                     allowed_opts.append(combo_name)
         
         allowed_opts = sorted(allowed_opts)
-        # ★★★★★★★★★★★★★★★★★★★★★★★
 
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
         display_df = user_df[['検索条件', 'ブランドキーワード']] if '検索条件' in user_df.columns else pd.DataFrame(columns=['検索条件', 'ブランドキーワード'])
@@ -481,8 +471,7 @@ def main():
         if current_plan_id == PLANS["full"]["id"]: st.info("💎 **フルプラン契約中**")
         elif current_plan_id == PLANS["light"]["id"]: 
             st.info("💡 **ライトプラン契約中**")
-            # 制限内容の表示
-            r_text = "アパレルのみ" if restriction_type == "apparel" else "アパレル以外のみ"
+            r_text = "👜 アパレルのみ" if restriction_type == "apparel" else "📷 アパレル以外のみ"
             st.caption(f"選択可能カテゴリ: {r_text}")
         
         with st.expander("📡 あなたの通知チャンネル"):
@@ -492,7 +481,6 @@ def main():
             else:
                 st.warning("⚠️ チャンネル情報が登録されていません。")
 
-        # Selectboxの選択肢を allowed_opts に限定
         edited = st.data_editor(
             display_df, 
             num_rows="dynamic", 
@@ -518,9 +506,8 @@ def main():
             elif current_plan_id == PLANS["light"]["id"]: plan_name = PLANS["light"]["name"]
             st.write(f"**契約プラン**: {plan_name}")
             
-            # 制限情報の表示
             if current_plan_id == PLANS["light"]["id"]:
-                 r_text = "アパレルのみ" if restriction_type == "apparel" else "アパレル以外のみ"
+                 r_text = "👜 アパレルのみ" if restriction_type == "apparel" else "📷 アパレル以外のみ"
                  st.write(f"**選択カテゴリ**: {r_text}")
             
             st.caption(f"Sub ID: {sub_id}")
@@ -541,18 +528,22 @@ def main():
             plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['price']:,}/月")
             selected_plan = PLANS[plan_key]
             
-            # ★★★ ライトプラン選択時の追加オプション ★★★
             selected_restriction = "all"
             if plan_key == "light":
                 st.markdown("👇 **通知を受け取るカテゴリを選択してください**")
-                sub_choice = st.radio("カテゴリ選択", ["apparel", "not_apparel"], 
-                                      format_func=lambda x: "👕 アパレル (古着・ファッション)" if x == "apparel" else "📷 アパレル以外 (家電・釣り具・楽器など)")
+                # ★ 修正: 表示ラベルをシンプルに変更
+                sub_choice = st.radio(
+                    "カテゴリ選択", 
+                    ["apparel", "not_apparel"], 
+                    format_func=lambda x: "👜 アパレル" if x == "apparel" else "📷 アパレル以外"
+                )
                 selected_restriction = sub_choice
-            # ★★★★★★★★★★★★★★★★★★★★★★★
             
             st.write(f"**選択中: {selected_plan['name']}**")
             if plan_key == "light":
-                st.info(f"選択カテゴリ: {'アパレル' if selected_restriction == 'apparel' else 'アパレル以外'}")
+                # ★ 確認表示も合わせる
+                disp_text = "👜 アパレル" if selected_restriction == "apparel" else "📷 アパレル以外"
+                st.info(f"選択カテゴリ: {disp_text}")
             
             with st.form("pay_form"):
                 st.write("クレジットカード情報")
@@ -589,7 +580,6 @@ def main():
                         else:
                             suc, res_sub, req_data, res_raw = fincode_create_subscription(f_cust_id, selected_plan["id"])
                             if suc:
-                                # ★ ここで制限設定(restriction_type)も一緒に保存
                                 update_user_fincode_data(client, uid, subscription_id=res_sub, plan_id=selected_plan["id"], restriction_type=selected_restriction)
                                 st.balloons()
                                 st.success("サブスクリプションを開始しました！")
