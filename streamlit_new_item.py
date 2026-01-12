@@ -23,7 +23,7 @@ TARGET_SHEET_NAME = "ユーザー設定"
 USERS_SHEET_NAME = "ユーザー管理"
 CHOICES_SHEET_NAME = "管理"
 
-# ★ Discord設定 (Secretsから読み込み)
+# Secrets読み込み
 try:
     DISCORD_BOT_TOKEN = st.secrets["discord"]["bot_token"]
     DISCORD_GUILD_ID = st.secrets["discord"]["guild_id"]
@@ -34,16 +34,18 @@ except Exception:
 # ★ プラン設定
 PLANS = {
     "full": {
-        "name": "フルプラン (アパレル・その他)",
+        "name": "フルプラン (全て)",
         "id": "plan_9000",
         "price": 9000,
-        "desc": "全てのカテゴリを通知します"
+        "desc": "アパレル・その他の全てのカテゴリを選択可能",
+        "type": "all"
     },
     "light": {
         "name": "ライトプラン (片方のみ)",
         "id": "plan_5000",
         "price": 5000,
-        "desc": "アパレル または その他のどちらか一方"
+        "desc": "「アパレル」または「それ以外」のどちらか一方のみ選択可能",
+        "type": "select" # 画面で選択させる
     }
 }
 
@@ -108,13 +110,10 @@ def get_gspread_client():
         except Exception:
             creds = None
     if not os.path.exists(CREDENTIALS_PATH):
-        st.error("認証ファイルが見つかりません。Secretsの設定を確認してください。")
+        st.error("認証ファイルが見つかりません。")
         return None
     return None
 
-# ==========================================
-#  特定商取引法に基づく表記 (審査用)
-# ==========================================
 def show_tokushoho():
     st.markdown("---")
     with st.expander("⚖️ 特定商取引法に基づく表記"):
@@ -126,48 +125,36 @@ def show_tokushoho():
         | **所在地** | 〒156-0055 東京都世田谷区船橋2-8-1 |
         | **電話番号** | 080-3423-1798 |
         | **メールアドレス** | koutaiwi@gmail.com |
-        | **販売価格** | プラン契約画面に記載 (月額5,000円 / 9,000円) |
-        | **商品代金以外の必要料金** | なし（インターネット接続料金はお客様負担） |
+        | **販売価格** | プラン契約画面に記載 |
         | **支払方法** | クレジットカード決済 |
-        | **支払時期** | 初回契約時および毎月同日に請求 |
-        | **商品の引渡時期** | 決済完了後、即時利用可能 |
-        | **返品・交換** | デジタルコンテンツの性質上、返品・返金には応じられません。解約はいつでもマイページから可能です（次回請求分から停止）。 |
         """)
 
 # ==========================================
-#  Discord API連携 (チャンネル自動作成)
+#  Discord API連携
 # ==========================================
 def create_discord_channel_and_webhook(user_discord_id, user_name):
-    """
-    DiscordユーザーID指定でプライベートチャンネルを作成し、
-    Webhook URLを発行して返す
-    """
     if not DISCORD_BOT_TOKEN or not DISCORD_GUILD_ID:
-        return False, "サーバー側のDiscord設定が不足しています"
+        return False, "サーバー設定不足"
 
     headers = {
         "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
         "Content-Type": "application/json"
     }
     
-    # 1. チャンネル作成 (プライベート設定)
-    # permission_overwrites: @everyone(guild_id)を拒否, 対象ユーザー(user_discord_id)を許可
     url_create = f"https://discord.com/api/v10/guilds/{DISCORD_GUILD_ID}/channels"
-    
-    # VIEW_CHANNEL (1024) 権限
     payload = {
         "name": f"通知-{user_name}",
-        "type": 0, # Text Channel
+        "type": 0,
         "permission_overwrites": [
             {
-                "id": DISCORD_GUILD_ID, # @everyone role
-                "type": 0, # Role
-                "deny": "1024" # VIEW_CHANNEL Deny
+                "id": DISCORD_GUILD_ID,
+                "type": 0,
+                "deny": "1024"
             },
             {
-                "id": user_discord_id, # Target User
-                "type": 1, # Member
-                "allow": "1024" # VIEW_CHANNEL Allow
+                "id": user_discord_id,
+                "type": 1,
+                "allow": "1024"
             }
         ]
     }
@@ -179,21 +166,17 @@ def create_discord_channel_and_webhook(user_discord_id, user_name):
     channel_data = res.json()
     channel_id = channel_data["id"]
 
-    # 2. Webhook作成
     url_webhook = f"https://discord.com/api/v10/channels/{channel_id}/webhooks"
     webhook_payload = {"name": "新着通知Bot"}
-    
     res_wh = requests.post(url_webhook, json=webhook_payload, headers=headers)
     if res_wh.status_code not in [200, 201]:
         return False, f"Webhook作成失敗: {res_wh.text}"
         
     webhook_data = res_wh.json()
-    webhook_url = webhook_data["url"]
-    
-    return True, webhook_url
+    return True, webhook_data["url"]
 
 # ==========================================
-#  Fincode API連携関数
+#  Fincode API
 # ==========================================
 def fincode_register_customer(user_id):
     url = f"{FINCODE_BASE_URL}/customers"
@@ -248,9 +231,9 @@ def ensure_users_sheet(client):
         try:
             sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
-            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=7) # 列数を7に変更
-            # ★ チャンネルURL列を追加
-            ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL']) 
+            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=8)
+            # ★ 列追加: チャンネルURL, 制限設定(category_restriction)
+            ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', '制限設定']) 
     except Exception as e:
         st.error(f"ユーザーDB初期化エラー: {e}")
 
@@ -262,19 +245,17 @@ def get_users_df(_client):
         try:
             sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
             data = sheet.get_all_values()
-            # カラム定義
-            cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL']
+            # ★ 制限設定 列を追加
+            cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', '制限設定']
             
             if len(data) < 2:
                 return pd.DataFrame(columns=cols)
             
-            # データフレーム作成（カラム不足時は補完）
             current_cols = data[0]
             df = pd.DataFrame(data[1:], columns=current_cols).astype(str)
             
             for c in cols:
                 if c not in df.columns: df[c] = ""
-            
             return df
         except APIError as e:
             if "429" in str(e) and i < max_retries - 1:
@@ -287,65 +268,45 @@ def get_users_df(_client):
 def register_user(client, user_id, user_name, password):
     get_users_df.clear()
     users_df = get_users_df(client)
-    
-    # 重複チェック
-    if str(user_id) in users_df['ユーザーID'].values:
-        return False, "このユーザーIDは既に登録されています。"
-    if str(user_name) in users_df['ユーザー名'].values:
-        return False, "このユーザー名は既に使用されています。"
+    if str(user_id) in users_df['ユーザーID'].values: return False, "ID重複"
+    if str(user_name) in users_df['ユーザー名'].values: return False, "名前重複"
         
-    # ★ Discordチャンネル自動作成
     webhook_url = ""
     try:
-        # ユーザーに通知しつつ処理
         with st.spinner("Discordチャンネルを作成中..."):
-            success_discord, result_discord = create_discord_channel_and_webhook(user_id, user_name)
-            
-            if success_discord:
-                webhook_url = result_discord
-            else:
-                # チャンネル作成失敗時の挙動（ここでは登録自体を止めるか、警告を出すか）
-                return False, f"Discordチャンネル作成エラー: {result_discord}\nIDが正しいか、Botがサーバーにいるか確認してください。"
-    except Exception as e:
-        return False, f"Discord連携中にエラーが発生しました: {e}"
+            suc, res = create_discord_channel_and_webhook(user_id, user_name)
+            if suc: webhook_url = res
+            else: return False, f"Discord作成失敗: {res}"
+    except Exception as e: return False, f"Discordエラー: {e}"
 
-    # シートへ保存
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         hashed_pw = hash_password(password)
-        # ★ Webhook URLも含めて保存
-        sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url])
+        # ★ 初期値として制限設定は空文字
+        sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url, ""])
         get_users_df.clear()
-        return True, "登録完了！Discordサーバーにあなた専用チャンネルを作成しました。"
-    except Exception as e:
-        return False, f"登録エラー: {e}"
+        return True, "登録完了"
+    except Exception as e: return False, f"保存エラー: {e}"
 
 def login_user(client, login_input, password):
     users_df = get_users_df(client)
-    user_row = users_df[
-        (users_df['ユーザーID'] == str(login_input)) | 
-        (users_df['ユーザー名'] == str(login_input))
-    ]
-    if user_row.empty:
-        return False, "ユーザーが見つかりません。", "", ""
-    stored_hash = user_row.iloc[0]['パスワードハッシュ']
-    if stored_hash == hash_password(password):
-        return True, "ログイン成功", user_row.iloc[0]['ユーザーID'], user_row.iloc[0]['ユーザー名']
-    else:
-        return False, "パスワードが間違っています。", "", ""
+    user_row = users_df[(users_df['ユーザーID'] == str(login_input)) | (users_df['ユーザー名'] == str(login_input))]
+    if user_row.empty: return False, "ユーザーなし", "", ""
+    if user_row.iloc[0]['パスワードハッシュ'] == hash_password(password):
+        return True, "成功", user_row.iloc[0]['ユーザーID'], user_row.iloc[0]['ユーザー名']
+    else: return False, "パスワード違い", "", ""
 
-def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=None, plan_id=None):
+def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=None, plan_id=None, restriction_type=None):
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
         ws = sh.worksheet(USERS_SHEET_NAME)
         cell = ws.find(str(user_id))
         if cell:
-            if fincode_id is not None:
-                ws.update_cell(cell.row, 4, fincode_id)
-            if subscription_id is not None:
-                ws.update_cell(cell.row, 5, subscription_id)
-            if plan_id is not None:
-                ws.update_cell(cell.row, 6, plan_id)
+            if fincode_id is not None: ws.update_cell(cell.row, 4, fincode_id)
+            if subscription_id is not None: ws.update_cell(cell.row, 5, subscription_id)
+            if plan_id is not None: ws.update_cell(cell.row, 6, plan_id)
+            # ★ 制限設定の更新 (8列目)
+            if restriction_type is not None: ws.update_cell(cell.row, 8, restriction_type)
             
             get_users_df.clear()
             return True
@@ -354,7 +315,7 @@ def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=N
         return False
 
 # ==========================================
-#  通知設定用データ操作
+#  通知設定用
 # ==========================================
 @st.cache_data(ttl=60)
 def get_choices_df(_client):
@@ -405,14 +366,21 @@ def save_merged_data(client, full_df, edited_display_df, user_id):
         sheet.clear()
         sheet.update('A1', update_data)
         load_data.clear()
-        st.success(f"✅ 設定を保存しました！（{len(save_user_df)}件）")
+        st.success(f"✅ 設定保存完了 ({len(save_user_df)}件)")
         return final_df
     except Exception as e:
         st.error(f"保存エラー: {e}")
         return None
 
+# ★ カテゴリ判定ロジック (Bot側と統一)
+def get_category_type(row_series):
+    row_text = " ".join([str(v) for v in row_series.values])
+    if "アパレル以外" in row_text: return "not_apparel"
+    elif "アパレル" in row_text: return "apparel"
+    else: return "not_apparel" # デフォルト
+
 # ==========================================
-#  メインアプリケーション
+#  メイン
 # ==========================================
 def main():
     st.title("🔔 通知設定＆サブスク管理")
@@ -423,7 +391,6 @@ def main():
         st.session_state['logged_in_user_id'] = None
         st.session_state['logged_in_user_name'] = None
 
-    # --- ログイン前 ---
     if st.session_state['logged_in_user_id'] is None:
         tab1, tab2 = st.tabs(["🔑 ログイン", "✨ 新規登録"])
         with tab1:
@@ -438,30 +405,40 @@ def main():
                     st.rerun()
                 else: st.error(msg)
         with tab2:
-            st.info("※ DiscordのユーザーIDを入力してください。登録と同時に専用チャンネルを作成します。")
-            r_id = st.text_input("Discord ID", key="ri", help="Discordアプリの設定 > 詳細設定 > 開発者モードをONにして、アイコンを右クリックでコピーできます")
+            st.info("DiscordユーザーIDを入力してください")
+            r_id = st.text_input("Discord ID", key="ri")
             r_name = st.text_input("表示名", key="rn")
             r_pass = st.text_input("パスワード", type="password", key="rp")
             if st.button("登録"):
-                if not r_id or not r_name or not r_pass:
-                    st.error("全ての項目を入力してください")
+                if not r_id or not r_name or not r_pass: st.error("入力不足")
                 else:
                     suc, msg = register_user(client, r_id, r_name, r_pass)
                     if suc: 
                         st.success(msg)
                         st.balloons()
-                    else: 
-                        st.error(msg)
-        
-        # ★★★ 審査用：特定商取引法に基づく表記の表示 ★★★
+                    else: st.error(msg)
         show_tokushoho()
-        
         st.stop()
 
-    # --- ログイン後 ---
     uid = st.session_state['logged_in_user_id']
     uname = st.session_state['logged_in_user_name']
     
+    users_df = get_users_df(client)
+    if users_df[users_df['ユーザーID'] == str(uid)].empty:
+        st.error("ユーザー情報が見つかりません")
+        st.session_state['logged_in_user_id'] = None
+        st.stop()
+        
+    user_row = users_df[users_df['ユーザーID'] == str(uid)].iloc[0]
+    sub_id = str(user_row.get('subscription_id', ''))
+    current_plan_id = str(user_row.get('plan_id', ''))
+    channel_url = str(user_row.get('チャンネルURL', ''))
+    # ★ 制限設定を取得
+    restriction_type = str(user_row.get('制限設定', 'all'))
+    if not restriction_type: restriction_type = 'all'
+
+    is_subscribed = (sub_id != "" and sub_id.lower() != "nan" and sub_id.lower() != "none")
+
     with st.sidebar:
         st.write(f"User: **{uname}**")
         menu = st.radio("メニュー", ["通知設定", "プラン契約・解約"])
@@ -470,48 +447,63 @@ def main():
             st.rerun()
 
     full_df = load_data(client)
-    users_df = get_users_df(client)
-    
-    # ユーザー情報取得（なければログアウト）
-    if users_df[users_df['ユーザーID'] == str(uid)].empty:
-        st.error("ユーザー情報が見つかりません")
-        st.session_state['logged_in_user_id'] = None
-        st.stop()
-        
-    user_row = users_df[users_df['ユーザーID'] == str(uid)].iloc[0]
-    
-    sub_id = str(user_row.get('subscription_id', ''))
-    current_plan_id = str(user_row.get('plan_id', ''))
-    # ★ チャンネルURLを表示してあげる
-    channel_url = str(user_row.get('チャンネルURL', ''))
-    
-    is_subscribed = (sub_id != "" and sub_id.lower() != "nan" and sub_id.lower() != "none")
 
     if menu == "通知設定":
+        st.subheader("📢 通知条件の設定")
+
+        if not is_subscribed:
+            st.error("⚠️ この機能を利用するにはプラン契約が必要です")
+            st.info("左側のメニュー「プラン契約・解約」から、プランへの加入手続きを行ってください。")
+            st.stop()
+
         choices_df = get_choices_df(client)
-        opts = sorted([f"{r['サイト']} - {r['カテゴリ']}" for _, r in choices_df.drop_duplicates().iterrows() if r['サイト']]) if not choices_df.empty else []
         
+        # ★★★ 選択肢のフィルタリングロジック ★★★
+        allowed_opts = []
+        if not choices_df.empty:
+            for _, row in choices_df.drop_duplicates().iterrows():
+                combo_name = f"{row['サイト']} - {row['カテゴリ']}"
+                cat_type = get_category_type(row) # 'apparel' or 'not_apparel'
+                
+                # 制限なし(all)なら全て追加
+                if restriction_type == 'all':
+                    allowed_opts.append(combo_name)
+                # 制限ありなら一致するものだけ追加
+                elif restriction_type == cat_type:
+                    allowed_opts.append(combo_name)
+        
+        allowed_opts = sorted(allowed_opts)
+        # ★★★★★★★★★★★★★★★★★★★★★★★
+
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
         display_df = user_df[['検索条件', 'ブランドキーワード']] if '検索条件' in user_df.columns else pd.DataFrame(columns=['検索条件', 'ブランドキーワード'])
         
-        st.subheader("📢 通知条件の設定")
-        if is_subscribed:
-            if current_plan_id == PLANS["full"]["id"]: st.info("💎 **フルプラン契約中**")
-            elif current_plan_id == PLANS["light"]["id"]: st.info("💡 **ライトプラン契約中**")
-            
-            # 通知先情報の表示
-            with st.expander("📡 あなたの通知チャンネル"):
-                if channel_url:
-                    st.success("✅ Discord連携済み")
-                    st.write("このWebhook URLに通知が届きます（Bot側で自動設定されます）")
-                    st.code(channel_url)
-                else:
-                    st.warning("⚠️ チャンネル情報が登録されていません。管理者に問い合わせてください。")
-        else:
-            st.warning("⚠️ プラン未契約です")
+        if current_plan_id == PLANS["full"]["id"]: st.info("💎 **フルプラン契約中**")
+        elif current_plan_id == PLANS["light"]["id"]: 
+            st.info("💡 **ライトプラン契約中**")
+            # 制限内容の表示
+            r_text = "アパレルのみ" if restriction_type == "apparel" else "アパレル以外のみ"
+            st.caption(f"選択可能カテゴリ: {r_text}")
+        
+        with st.expander("📡 あなたの通知チャンネル"):
+            if channel_url:
+                st.success("✅ Discord連携済み")
+                st.code(channel_url)
+            else:
+                st.warning("⚠️ チャンネル情報が登録されていません。")
 
-        edited = st.data_editor(display_df, num_rows="dynamic", use_container_width=True, 
-                                column_config={"検索条件": st.column_config.SelectboxColumn(options=opts, required=True)})
+        # Selectboxの選択肢を allowed_opts に限定
+        edited = st.data_editor(
+            display_df, 
+            num_rows="dynamic", 
+            use_container_width=True, 
+            column_config={
+                "検索条件": st.column_config.SelectboxColumn(
+                    options=allowed_opts, 
+                    required=True
+                )
+            }
+        )
         
         if st.button("設定を保存", type="primary"):
             save_merged_data(client, full_df, edited, uid)
@@ -525,6 +517,12 @@ def main():
             if current_plan_id == PLANS["full"]["id"]: plan_name = PLANS["full"]["name"]
             elif current_plan_id == PLANS["light"]["id"]: plan_name = PLANS["light"]["name"]
             st.write(f"**契約プラン**: {plan_name}")
+            
+            # 制限情報の表示
+            if current_plan_id == PLANS["light"]["id"]:
+                 r_text = "アパレルのみ" if restriction_type == "apparel" else "アパレル以外のみ"
+                 st.write(f"**選択カテゴリ**: {r_text}")
+            
             st.caption(f"Sub ID: {sub_id}")
             
             st.markdown("---")
@@ -532,19 +530,29 @@ def main():
                 with st.spinner("解約処理中..."):
                     suc, msg = fincode_cancel_subscription(sub_id)
                     if suc:
-                        update_user_fincode_data(client, uid, subscription_id="", plan_id="")
+                        update_user_fincode_data(client, uid, subscription_id="", plan_id="", restriction_type="")
                         st.success("解約が完了しました。")
                         time.sleep(2)
                         st.rerun()
                     else:
                         st.error(f"解約エラー: {msg}")
         else:
-            st.info("契約するプランを選択してください。")
+            st.info("利用を開始するには、以下のプランから選択してください。")
             plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['price']:,}/月")
             selected_plan = PLANS[plan_key]
             
+            # ★★★ ライトプラン選択時の追加オプション ★★★
+            selected_restriction = "all"
+            if plan_key == "light":
+                st.markdown("👇 **通知を受け取るカテゴリを選択してください**")
+                sub_choice = st.radio("カテゴリ選択", ["apparel", "not_apparel"], 
+                                      format_func=lambda x: "👕 アパレル (古着・ファッション)" if x == "apparel" else "📷 アパレル以外 (家電・釣り具・楽器など)")
+                selected_restriction = sub_choice
+            # ★★★★★★★★★★★★★★★★★★★★★★★
+            
             st.write(f"**選択中: {selected_plan['name']}**")
-            st.caption(selected_plan['desc'])
+            if plan_key == "light":
+                st.info(f"選択カテゴリ: {'アパレル' if selected_restriction == 'apparel' else 'アパレル以外'}")
             
             with st.form("pay_form"):
                 st.write("クレジットカード情報")
@@ -566,7 +574,6 @@ def main():
                         st.stop()
 
                     with st.spinner("処理中..."):
-                        # 1. 顧客ID
                         f_cust_id = str(user_row.get('fincode_customer_id', ''))
                         if f_cust_id in ["", "nan", "None"]:
                             res = fincode_register_customer(uid)
@@ -576,26 +583,20 @@ def main():
                             f_cust_id = res["id"]
                             update_user_fincode_data(client, uid, fincode_id=f_cust_id)
 
-                        # 2. カード登録
                         res_card = fincode_register_card(f_cust_id, card_no, expire, cvc, holder)
                         if "errors" in res_card:
                             st.error(f"カード登録エラー: {res_card['errors'][0]['error_message']}")
                         else:
-                            # 3. サブスク開始
                             suc, res_sub, req_data, res_raw = fincode_create_subscription(f_cust_id, selected_plan["id"])
                             if suc:
-                                update_user_fincode_data(client, uid, subscription_id=res_sub, plan_id=selected_plan["id"])
+                                # ★ ここで制限設定(restriction_type)も一緒に保存
+                                update_user_fincode_data(client, uid, subscription_id=res_sub, plan_id=selected_plan["id"], restriction_type=selected_restriction)
                                 st.balloons()
                                 st.success("サブスクリプションを開始しました！")
                                 time.sleep(2)
                                 st.rerun()
                             else:
                                 st.error(f"契約エラー: {res_sub}")
-                                with st.expander("🛠 デバッグ用ログ (詳細)"):
-                                    st.write("▼ 送信データ (Request)")
-                                    st.json(req_data)
-                                    st.write("▼ 受信データ (Response)")
-                                    st.json(res_raw)
 
 if __name__ == "__main__":
     main()
