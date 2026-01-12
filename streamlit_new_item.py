@@ -228,7 +228,9 @@ def fincode_update_subscription(subscription_id, plan_id):
 
 def fincode_cancel_subscription(subscription_id):
     url = f"{FINCODE_BASE_URL}/subscriptions/{subscription_id}"
-    res = requests.delete(url, headers=HEADERS).json()
+    # ★修正: 削除時も pay_type が必須
+    params = {"pay_type": "Card"}
+    res = requests.delete(url, headers=HEADERS, params=params).json()
     if "errors" in res:
         return False, res["errors"][0]["error_message"]
     return True, "解約しました"
@@ -246,7 +248,6 @@ def ensure_users_sheet(client):
             sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
             ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=8)
-            # ★ 最終列の名前を 'plan' (制限設定用) に変更
             ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan']) 
     except Exception as e:
         st.error(f"ユーザーDB初期化エラー: {e}")
@@ -259,7 +260,6 @@ def get_users_df(_client):
         try:
             sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
             data = sheet.get_all_values()
-            # ★ 最終列の名前を 'plan' として認識させる
             cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan']
             
             if len(data) < 2:
@@ -318,7 +318,6 @@ def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=N
             if fincode_id is not None: ws.update_cell(cell.row, 4, fincode_id)
             if subscription_id is not None: ws.update_cell(cell.row, 5, subscription_id)
             if plan_id is not None: ws.update_cell(cell.row, 6, plan_id)
-            # ★ 8列目（plan列）を更新
             if restriction_type is not None: ws.update_cell(cell.row, 8, restriction_type)
             
             get_users_df.clear()
@@ -492,8 +491,6 @@ def main():
     sub_id = str(user_row.get('subscription_id', ''))
     current_plan_id = str(user_row.get('plan_id', ''))
     channel_url = str(user_row.get('チャンネルURL', ''))
-    
-    # ★ 変更: 列名が 'plan' になっているので、そこから制限情報を取得
     restriction_type = str(user_row.get('plan', 'all'))
     if not restriction_type: restriction_type = 'all'
 
