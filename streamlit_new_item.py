@@ -18,6 +18,7 @@ from gspread.exceptions import APIError
 CREDENTIALS_PATH = 'google_credentials.json'
 TOKEN_PATH = 'gspread_token.json'
 
+# スプレッドシートID (本番用に書き換えてください)
 SPREADSHEET_ID = "1Y8VEVn95FOp5ELLtBiuUrB9m4S3qDSiX50G6aB88vnk"
 TARGET_SHEET_NAME = "ユーザー設定"
 USERS_SHEET_NAME = "ユーザー管理"
@@ -31,7 +32,9 @@ except Exception:
     DISCORD_BOT_TOKEN = ""
     DISCORD_GUILD_ID = ""
 
-# ★ プラン設定（FincodeのプランIDに合わせて修正してください）
+# ★ プラン設定
+# Fincode側で以下の4つのプランIDを作成しておいてください
+# plan_5000, plan_7000, plan_9000, plan_11000
 OPTION_PRICE = 2000
 PLANS = {
     "full": {
@@ -39,16 +42,16 @@ PLANS = {
         "desc": "アパレル・その他の全てのカテゴリを選択可能",
         "type": "all",
         "base_price": 9000,
-        "base_id": "plan_9000",      # Fincodeの9000円プランID
-        "opt_id": "plan_11000"       # Fincodeの11000円プランID
+        "base_id": "plan_9000",      # フル単体
+        "opt_id": "plan_11000"       # フル+オプション
     },
     "light": {
         "name": "ライトプラン (片方のみ)",
         "desc": "「アパレル」または「それ以外」のどちらか一方のみ選択可能",
         "type": "select",
         "base_price": 5000,
-        "base_id": "plan_5000",      # Fincodeの5000円プランID
-        "opt_id": "plan_7000"        # Fincodeの7000円プランID
+        "base_id": "plan_5000",      # ライト単体
+        "opt_id": "plan_7000"        # ライト+オプション
     }
 }
 
@@ -147,17 +150,17 @@ def create_discord_channel_and_webhook(user_discord_id, user_name):
     url_create = f"https://discord.com/api/v10/guilds/{DISCORD_GUILD_ID}/channels"
     payload = {
         "name": f"通知-{user_name}",
-        "type": 0,
+        "type": 0, # Text Channel
         "permission_overwrites": [
             {
                 "id": DISCORD_GUILD_ID,
                 "type": 0,
-                "deny": "1024"
+                "deny": "1024" # View Channel Deny
             },
             {
                 "id": user_discord_id,
                 "type": 1,
-                "allow": "1024"
+                "allow": "1024" # View Channel Allow
             }
         ]
     }
@@ -235,6 +238,7 @@ def ensure_users_sheet(client):
             sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
             ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=8)
+            # 列: ID, Name, PW, FincodeID, SubID, PlanID, ChannelURL, Restriction
             ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', '制限設定']) 
     except Exception as e:
         st.error(f"ユーザーDB初期化エラー: {e}")
@@ -338,7 +342,6 @@ def load_data(_client):
         if 'サイト' in df.columns:
             if '検索条件' not in df.columns: df['検索条件'] = df['サイト'] + " - " + df['カテゴリ']
         
-        # 旧カラム対応
         if 'ブランドキーワード' in df.columns and 'キーワード' not in df.columns:
             df['キーワード'] = df['ブランドキーワード']
             
@@ -408,6 +411,7 @@ def main():
         st.session_state['logged_in_user_id'] = None
         st.session_state['logged_in_user_name'] = None
 
+    # --- ログイン前画面 ---
     if st.session_state['logged_in_user_id'] is None:
         tab1, tab2 = st.tabs(["🔑 ログイン", "✨ 新規登録"])
         with tab1:
@@ -437,6 +441,7 @@ def main():
         show_tokushoho()
         st.stop()
 
+    # --- ログイン後処理 ---
     uid = st.session_state['logged_in_user_id']
     uname = st.session_state['logged_in_user_name']
     
@@ -467,6 +472,7 @@ def main():
 
     full_df = load_data(client)
 
+    # --- 通知設定メニュー ---
     if menu == "通知設定":
         st.subheader("📢 通知条件の設定")
 
@@ -488,7 +494,7 @@ def main():
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
         display_df = user_df[['検索条件', 'キーワード']] if '検索条件' in user_df.columns else pd.DataFrame(columns=['検索条件', 'キーワード'])
         
-        # プラン情報の表示
+        # 契約プラン情報
         if current_plan_id.startswith(PLANS["full"]["base_id"]) or current_plan_id == PLANS["full"]["opt_id"]:
              st.info("💎 **フルプラン契約中**")
         elif current_plan_id.startswith(PLANS["light"]["base_id"]) or current_plan_id == PLANS["light"]["opt_id"]:
@@ -496,7 +502,7 @@ def main():
              r_text = "👜 アパレルのみ" if restriction_type == "apparel" else "📷 アパレル以外のみ"
              st.caption(f"選択可能カテゴリ: {r_text}")
 
-        # オプション情報の表示
+        # オプション情報
         if has_option:
             st.success("✅ **キーワード通知オプション: 有効**")
             st.caption("商品名、ブランド、型番のいずれかに設定したキーワード（最大20単語）が含まれる商品のみを通知します。")
@@ -532,6 +538,7 @@ def main():
         if st.button("設定を保存", type="primary"):
             save_merged_data(client, full_df, edited, uid)
 
+    # --- プラン契約・解約メニュー ---
     elif menu == "プラン契約・解約":
         st.subheader("💳 サブスクリプション管理")
         
@@ -580,7 +587,7 @@ def main():
             st.markdown("---")
             use_option = st.checkbox(f"✨ **キーワード通知オプションを追加する (+¥{OPTION_PRICE:,})**")
             
-            # ★★★ 説明文（常時表示） ★★★
+            # 説明文（常時表示）
             st.caption("""
             **【オプション機能説明】**
             サイトから抽出した **商品名、ブランド、型番** の中に、設定したキーワード（カンマ区切りで最大20単語）と一致する文字列がある商品だけを通知するフィルタリング機能です。
@@ -588,7 +595,6 @@ def main():
             * ✅ **チェックあり:** キーワードにヒットした商品のみ通知されます。
             * ⬜ **チェックなし:** カテゴリ内の新着商品はすべて通知されます。
             """)
-            # ★★★★★★★★★★★★★★★★★★
 
             final_price = selected_plan['base_price'] + (OPTION_PRICE if use_option else 0)
             target_plan_id = selected_plan['opt_id'] if use_option else selected_plan['base_id']
@@ -615,7 +621,7 @@ def main():
                 
                 submitted = st.form_submit_button(f"¥{final_price:,} で定期購読を開始")
             
-if submitted:
+            if submitted:
                 if not (card_no and holder and expire and cvc):
                     st.error("全ての項目を入力してください")
                 else:
@@ -624,26 +630,19 @@ if submitted:
                         st.stop()
 
                     with st.spinner("処理中..."):
-                        # 1. 顧客IDの取得・作成
+                        # 1. 顧客ID取得・作成（既に存在エラー対策）
                         f_cust_id = str(user_row.get('fincode_customer_id', ''))
-                        
-                        # シートにIDがない場合、Fincodeに登録を試みる
                         if f_cust_id in ["", "nan", "None"]:
                             res = fincode_register_customer(uid)
-                            
                             if "errors" in res:
                                 error_msg = res["errors"][0]["error_message"]
-                                # ★修正: 「既に登録されています」エラーなら、既存のID(uid)をそのまま使う
                                 if "既に登録" in error_msg or "exist" in error_msg.lower():
                                     f_cust_id = str(uid)
-                                    # シート側も更新しておく
                                     update_user_fincode_data(client, uid, fincode_id=f_cust_id)
                                 else:
-                                    # それ以外の本当のエラーなら停止
                                     st.error(error_msg)
                                     st.stop()
                             else:
-                                # 新規登録成功
                                 f_cust_id = res["id"]
                                 update_user_fincode_data(client, uid, fincode_id=f_cust_id)
 
