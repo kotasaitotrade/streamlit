@@ -246,7 +246,8 @@ def ensure_users_sheet(client):
             sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
             ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=8)
-            ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', '制限設定']) 
+            # ★ 最終列の名前を 'plan' (制限設定用) に変更
+            ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan']) 
     except Exception as e:
         st.error(f"ユーザーDB初期化エラー: {e}")
 
@@ -258,7 +259,8 @@ def get_users_df(_client):
         try:
             sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
             data = sheet.get_all_values()
-            cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', '制限設定']
+            # ★ 最終列の名前を 'plan' として認識させる
+            cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan']
             
             if len(data) < 2:
                 return pd.DataFrame(columns=cols)
@@ -316,6 +318,7 @@ def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=N
             if fincode_id is not None: ws.update_cell(cell.row, 4, fincode_id)
             if subscription_id is not None: ws.update_cell(cell.row, 5, subscription_id)
             if plan_id is not None: ws.update_cell(cell.row, 6, plan_id)
+            # ★ 8列目（plan列）を更新
             if restriction_type is not None: ws.update_cell(cell.row, 8, restriction_type)
             
             get_users_df.clear()
@@ -332,7 +335,6 @@ def get_choices_df(_client):
     try:
         sh = _client.open_by_key(SPREADSHEET_ID)
         try: sheet = sh.worksheet(CHOICES_SHEET_NAME)
-        # ★ 「種類」列を追加して読み込む
         except: return pd.DataFrame(columns=['サイト', 'カテゴリ', '種類'])
         data = sheet.get_all_values()
         if len(data) < 2: return pd.DataFrame(columns=['サイト', 'カテゴリ', '種類'])
@@ -358,7 +360,6 @@ def load_data(_client):
         return df[final_cols]
     except: return None
 
-# ★ カテゴリ判定と選択肢取得を行うヘルパー関数
 def get_allowed_options(client, restriction_type):
     choices_df = get_choices_df(client)
     allowed = []
@@ -367,7 +368,6 @@ def get_allowed_options(client, restriction_type):
     for _, row in choices_df.drop_duplicates().iterrows():
         site = str(row.get('サイト', '')).strip()
         cat = str(row.get('カテゴリ', '')).strip()
-        # ★ シートの「種類」列を厳密に読み取る
         kind = str(row.get('種類', '')).strip()
         
         if not site: continue
@@ -377,7 +377,6 @@ def get_allowed_options(client, restriction_type):
         if kind == 'アパレル': item_type = 'apparel'
         elif kind == 'アパレル以外': item_type = 'not_apparel'
         
-        # 判定
         if restriction_type == 'all':
             allowed.append(combo_name)
         elif restriction_type == 'apparel' and item_type == 'apparel':
@@ -395,21 +394,17 @@ def validate_keywords(df):
             return False, f"エラー: {row['検索条件']} のキーワードが多すぎます（最大20単語まで）"
     return True, ""
 
-# ★ save_merged_data にプラン判定ロジックを追加
 def save_merged_data(client, full_df, edited_display_df, user_id, restriction_type):
     try:
-        # 1. キーワード数チェック
         is_valid, err_msg = validate_keywords(edited_display_df)
         if not is_valid:
             st.error(err_msg)
             return None
         
-        # 2. ★プラン整合性チェック (バックエンドバリデーション)
         allowed_opts = get_allowed_options(client, restriction_type)
         for i, row in edited_display_df.iterrows():
             combo = row['検索条件']
             if combo and combo not in allowed_opts:
-                # ユーザーへのメッセージ
                 r_text = "アパレルのみ" if restriction_type == "apparel" else "アパレル以外のみ"
                 if restriction_type == "all": r_text = "全て"
                 
@@ -497,7 +492,9 @@ def main():
     sub_id = str(user_row.get('subscription_id', ''))
     current_plan_id = str(user_row.get('plan_id', ''))
     channel_url = str(user_row.get('チャンネルURL', ''))
-    restriction_type = str(user_row.get('制限設定', 'all'))
+    
+    # ★ 変更: 列名が 'plan' になっているので、そこから制限情報を取得
+    restriction_type = str(user_row.get('plan', 'all'))
     if not restriction_type: restriction_type = 'all'
 
     is_subscribed = (sub_id != "" and sub_id.lower() != "nan" and sub_id.lower() != "none")
@@ -522,7 +519,6 @@ def main():
             st.info("左側のメニュー「プラン契約・解約」から、プランへの加入手続きを行ってください。")
             st.stop()
 
-        # ★ 選択肢の取得 (ヘルパー関数を利用)
         allowed_opts = get_allowed_options(client, restriction_type)
         
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
@@ -567,7 +563,6 @@ def main():
         )
         
         if st.button("設定を保存", type="primary"):
-            # ★ 制限タイプを渡してバリデーションさせる
             save_merged_data(client, full_df, edited, uid, restriction_type)
 
     elif menu == "プラン契約・解約":
