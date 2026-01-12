@@ -332,9 +332,9 @@ def get_choices_df(_client):
     try:
         sh = _client.open_by_key(SPREADSHEET_ID)
         try: sheet = sh.worksheet(CHOICES_SHEET_NAME)
+        # ★ 「種類」列を追加して読み込む
         except: return pd.DataFrame(columns=['サイト', 'カテゴリ', '種類'])
         data = sheet.get_all_values()
-        # 列名: サイト, カテゴリ, カテゴリID, 種類
         if len(data) < 2: return pd.DataFrame(columns=['サイト', 'カテゴリ', '種類'])
         return pd.DataFrame(data[1:], columns=data[0]).astype(str)
     except: return pd.DataFrame(columns=['サイト', 'カテゴリ', '種類'])
@@ -358,6 +358,35 @@ def load_data(_client):
         return df[final_cols]
     except: return None
 
+# ★ カテゴリ判定と選択肢取得を行うヘルパー関数
+def get_allowed_options(client, restriction_type):
+    choices_df = get_choices_df(client)
+    allowed = []
+    if choices_df.empty: return []
+    
+    for _, row in choices_df.drop_duplicates().iterrows():
+        site = str(row.get('サイト', '')).strip()
+        cat = str(row.get('カテゴリ', '')).strip()
+        # ★ シートの「種類」列を厳密に読み取る
+        kind = str(row.get('種類', '')).strip()
+        
+        if not site: continue
+        combo_name = f"{site} - {cat}"
+        
+        item_type = 'other'
+        if kind == 'アパレル': item_type = 'apparel'
+        elif kind == 'アパレル以外': item_type = 'not_apparel'
+        
+        # 判定
+        if restriction_type == 'all':
+            allowed.append(combo_name)
+        elif restriction_type == 'apparel' and item_type == 'apparel':
+            allowed.append(combo_name)
+        elif restriction_type == 'not_apparel' and item_type == 'not_apparel':
+            allowed.append(combo_name)
+            
+    return sorted(list(set(allowed)))
+
 def validate_keywords(df):
     for index, row in df.iterrows():
         kws = str(row['キーワード']).replace('、', ',').split(',')
@@ -366,12 +395,26 @@ def validate_keywords(df):
             return False, f"エラー: {row['検索条件']} のキーワードが多すぎます（最大20単語まで）"
     return True, ""
 
-def save_merged_data(client, full_df, edited_display_df, user_id):
+# ★ save_merged_data にプラン判定ロジックを追加
+def save_merged_data(client, full_df, edited_display_df, user_id, restriction_type):
     try:
+        # 1. キーワード数チェック
         is_valid, err_msg = validate_keywords(edited_display_df)
         if not is_valid:
             st.error(err_msg)
             return None
+        
+        # 2. ★プラン整合性チェック (バックエンドバリデーション)
+        allowed_opts = get_allowed_options(client, restriction_type)
+        for i, row in edited_display_df.iterrows():
+            combo = row['検索条件']
+            if combo and combo not in allowed_opts:
+                # ユーザーへのメッセージ
+                r_text = "アパレルのみ" if restriction_type == "apparel" else "アパレル以外のみ"
+                if restriction_type == "all": r_text = "全て"
+                
+                st.error(f"保存失敗: 「{combo}」は現在のプラン設定（{r_text}）では選択できません。削除してください。")
+                return None
 
         new_rows = []
         for i, row in edited_display_df.iterrows():
@@ -479,31 +522,9 @@ def main():
             st.info("左側のメニュー「プラン契約・解約」から、プランへの加入手続きを行ってください。")
             st.stop()
 
-        choices_df = get_choices_df(client)
+        # ★ 選択肢の取得 (ヘルパー関数を利用)
+        allowed_opts = get_allowed_options(client, restriction_type)
         
-        # ★★★ 選択肢のフィルタリング (種類列を使用) ★★★
-        allowed_opts = []
-        if not choices_df.empty:
-            for _, row in choices_df.drop_duplicates().iterrows():
-                combo_name = f"{row['サイト']} - {row['カテゴリ']}"
-                
-                # シートの「種類」列を読み取る (アパレル or アパレル以外)
-                sheet_kind = str(row.get('種類', '')).strip()
-                item_type = 'other'
-                if sheet_kind == 'アパレル': item_type = 'apparel'
-                elif sheet_kind == 'アパレル以外': item_type = 'not_apparel'
-                
-                # ユーザーの制限設定と比較
-                if restriction_type == 'all':
-                    allowed_opts.append(combo_name)
-                elif restriction_type == 'apparel' and item_type == 'apparel':
-                    allowed_opts.append(combo_name)
-                elif restriction_type == 'not_apparel' and item_type == 'not_apparel':
-                    allowed_opts.append(combo_name)
-        
-        allowed_opts = sorted(allowed_opts)
-        # ★★★★★★★★★★★★★★★★★★★★★★★
-
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
         display_df = user_df[['検索条件', 'キーワード']] if '検索条件' in user_df.columns else pd.DataFrame(columns=['検索条件', 'キーワード'])
         
@@ -546,7 +567,8 @@ def main():
         )
         
         if st.button("設定を保存", type="primary"):
-            save_merged_data(client, full_df, edited, uid)
+            # ★ 制限タイプを渡してバリデーションさせる
+            save_merged_data(client, full_df, edited, uid, restriction_type)
 
     elif menu == "プラン契約・解約":
         st.subheader("💳 サブスクリプション管理")
@@ -582,7 +604,6 @@ def main():
                 
                 new_restriction = "all"
                 if new_plan_key == "light":
-                    # 初期値の設定
                     default_idx = 0
                     if restriction_type == "not_apparel": default_idx = 1
                     
