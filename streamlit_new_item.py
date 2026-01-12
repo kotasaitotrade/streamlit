@@ -6,7 +6,7 @@ import hashlib
 import json
 import time
 import requests
-from datetime import datetime, timedelta, timezone # ★日本時間対応用
+from datetime import datetime, timedelta, timezone
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -22,6 +22,14 @@ SPREADSHEET_ID = "1Y8VEVn95FOp5ELLtBiuUrB9m4S3qDSiX50G6aB88vnk"
 TARGET_SHEET_NAME = "ユーザー設定"
 USERS_SHEET_NAME = "ユーザー管理"
 CHOICES_SHEET_NAME = "管理"
+
+# ★ Discord設定 (Secretsから読み込み)
+try:
+    DISCORD_BOT_TOKEN = st.secrets["discord"]["bot_token"]
+    DISCORD_GUILD_ID = st.secrets["discord"]["guild_id"]
+except Exception:
+    DISCORD_BOT_TOKEN = ""
+    DISCORD_GUILD_ID = ""
 
 # ★ プラン設定
 PLANS = {
@@ -108,7 +116,6 @@ def get_gspread_client():
 #  特定商取引法に基づく表記 (審査用)
 # ==========================================
 def show_tokushoho():
-    """審査通過に必要な法的情報を表示する"""
     st.markdown("---")
     with st.expander("⚖️ 特定商取引法に基づく表記"):
         st.markdown("""
@@ -128,17 +135,73 @@ def show_tokushoho():
         """)
 
 # ==========================================
+#  Discord API連携 (チャンネル自動作成)
+# ==========================================
+def create_discord_channel_and_webhook(user_discord_id, user_name):
+    """
+    DiscordユーザーID指定でプライベートチャンネルを作成し、
+    Webhook URLを発行して返す
+    """
+    if not DISCORD_BOT_TOKEN or not DISCORD_GUILD_ID:
+        return False, "サーバー側のDiscord設定が不足しています"
+
+    headers = {
+        "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    # 1. チャンネル作成 (プライベート設定)
+    # permission_overwrites: @everyone(guild_id)を拒否, 対象ユーザー(user_discord_id)を許可
+    url_create = f"https://discord.com/api/v10/guilds/{DISCORD_GUILD_ID}/channels"
+    
+    # VIEW_CHANNEL (1024) 権限
+    payload = {
+        "name": f"通知-{user_name}",
+        "type": 0, # Text Channel
+        "permission_overwrites": [
+            {
+                "id": DISCORD_GUILD_ID, # @everyone role
+                "type": 0, # Role
+                "deny": "1024" # VIEW_CHANNEL Deny
+            },
+            {
+                "id": user_discord_id, # Target User
+                "type": 1, # Member
+                "allow": "1024" # VIEW_CHANNEL Allow
+            }
+        ]
+    }
+    
+    res = requests.post(url_create, json=payload, headers=headers)
+    if res.status_code not in [200, 201]:
+        return False, f"チャンネル作成失敗: {res.text}"
+    
+    channel_data = res.json()
+    channel_id = channel_data["id"]
+
+    # 2. Webhook作成
+    url_webhook = f"https://discord.com/api/v10/channels/{channel_id}/webhooks"
+    webhook_payload = {"name": "新着通知Bot"}
+    
+    res_wh = requests.post(url_webhook, json=webhook_payload, headers=headers)
+    if res_wh.status_code not in [200, 201]:
+        return False, f"Webhook作成失敗: {res_wh.text}"
+        
+    webhook_data = res_wh.json()
+    webhook_url = webhook_data["url"]
+    
+    return True, webhook_url
+
+# ==========================================
 #  Fincode API連携関数
 # ==========================================
 def fincode_register_customer(user_id):
-    """顧客を作成する"""
     url = f"{FINCODE_BASE_URL}/customers"
     data = {"id": str(user_id), "description": f"User: {user_id}"}
     response = requests.post(url, json=data, headers=HEADERS)
     return response.json()
 
 def fincode_register_card(customer_id, card_no, expire, security_code, holder_name):
-    """カードを登録する"""
     url = f"{FINCODE_BASE_URL}/customers/{customer_id}/cards"
     data = {
         "default_flag": "1",
@@ -152,31 +215,21 @@ def fincode_register_card(customer_id, card_no, expire, security_code, holder_na
     return response.json()
 
 def fincode_create_subscription(customer_id, plan_id):
-    """サブスクリプションを開始する"""
     url = f"{FINCODE_BASE_URL}/subscriptions"
-    
-    # 日本時間(JST)で今日の日付を取得する
     JST = timezone(timedelta(hours=9))
     today_str = datetime.now(JST).strftime('%Y/%m/%d')
-    
     data = {
         "pay_type": "Card",
         "plan_id": plan_id,
         "customer_id": customer_id,
         "start_date": today_str
     }
-    
-    # API送信
     res = requests.post(url, json=data, headers=HEADERS).json()
-    
     if "errors" in res:
-        # エラー時は詳細情報も一緒に返す
         return False, res["errors"][0]["error_message"], data, res
-    
     return True, res["id"], data, res
 
 def fincode_cancel_subscription(subscription_id):
-    """サブスクリプションを解約する"""
     url = f"{FINCODE_BASE_URL}/subscriptions/{subscription_id}"
     res = requests.delete(url, headers=HEADERS).json()
     if "errors" in res:
@@ -195,8 +248,9 @@ def ensure_users_sheet(client):
         try:
             sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
-            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=6)
-            ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id']) 
+            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=7) # 列数を7に変更
+            # ★ チャンネルURL列を追加
+            ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL']) 
     except Exception as e:
         st.error(f"ユーザーDB初期化エラー: {e}")
 
@@ -208,12 +262,19 @@ def get_users_df(_client):
         try:
             sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
             data = sheet.get_all_values()
-            if len(data) < 2:
-                return pd.DataFrame(columns=['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id'])
+            # カラム定義
+            cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL']
             
-            df = pd.DataFrame(data[1:], columns=data[0]).astype(str)
-            for col in ['fincode_customer_id', 'subscription_id', 'plan_id']:
-                if col not in df.columns: df[col] = ""
+            if len(data) < 2:
+                return pd.DataFrame(columns=cols)
+            
+            # データフレーム作成（カラム不足時は補完）
+            current_cols = data[0]
+            df = pd.DataFrame(data[1:], columns=current_cols).astype(str)
+            
+            for c in cols:
+                if c not in df.columns: df[c] = ""
+            
             return df
         except APIError as e:
             if "429" in str(e) and i < max_retries - 1:
@@ -226,16 +287,36 @@ def get_users_df(_client):
 def register_user(client, user_id, user_name, password):
     get_users_df.clear()
     users_df = get_users_df(client)
+    
+    # 重複チェック
     if str(user_id) in users_df['ユーザーID'].values:
         return False, "このユーザーIDは既に登録されています。"
     if str(user_name) in users_df['ユーザー名'].values:
         return False, "このユーザー名は既に使用されています。"
+        
+    # ★ Discordチャンネル自動作成
+    webhook_url = ""
+    try:
+        # ユーザーに通知しつつ処理
+        with st.spinner("Discordチャンネルを作成中..."):
+            success_discord, result_discord = create_discord_channel_and_webhook(user_id, user_name)
+            
+            if success_discord:
+                webhook_url = result_discord
+            else:
+                # チャンネル作成失敗時の挙動（ここでは登録自体を止めるか、警告を出すか）
+                return False, f"Discordチャンネル作成エラー: {result_discord}\nIDが正しいか、Botがサーバーにいるか確認してください。"
+    except Exception as e:
+        return False, f"Discord連携中にエラーが発生しました: {e}"
+
+    # シートへ保存
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         hashed_pw = hash_password(password)
-        sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", ""])
+        # ★ Webhook URLも含めて保存
+        sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url])
         get_users_df.clear()
-        return True, "登録完了"
+        return True, "登録完了！Discordサーバーにあなた専用チャンネルを作成しました。"
     except Exception as e:
         return False, f"登録エラー: {e}"
 
@@ -357,14 +438,20 @@ def main():
                     st.rerun()
                 else: st.error(msg)
         with tab2:
-            st.info("※ DiscordのユーザーIDを入力してください")
-            r_id = st.text_input("Discord ID", key="ri")
+            st.info("※ DiscordのユーザーIDを入力してください。登録と同時に専用チャンネルを作成します。")
+            r_id = st.text_input("Discord ID", key="ri", help="Discordアプリの設定 > 詳細設定 > 開発者モードをONにして、アイコンを右クリックでコピーできます")
             r_name = st.text_input("表示名", key="rn")
             r_pass = st.text_input("パスワード", type="password", key="rp")
             if st.button("登録"):
-                suc, msg = register_user(client, r_id, r_name, r_pass)
-                if suc: st.success(msg)
-                else: st.error(msg)
+                if not r_id or not r_name or not r_pass:
+                    st.error("全ての項目を入力してください")
+                else:
+                    suc, msg = register_user(client, r_id, r_name, r_pass)
+                    if suc: 
+                        st.success(msg)
+                        st.balloons()
+                    else: 
+                        st.error(msg)
         
         # ★★★ 審査用：特定商取引法に基づく表記の表示 ★★★
         show_tokushoho()
@@ -384,10 +471,20 @@ def main():
 
     full_df = load_data(client)
     users_df = get_users_df(client)
+    
+    # ユーザー情報取得（なければログアウト）
+    if users_df[users_df['ユーザーID'] == str(uid)].empty:
+        st.error("ユーザー情報が見つかりません")
+        st.session_state['logged_in_user_id'] = None
+        st.stop()
+        
     user_row = users_df[users_df['ユーザーID'] == str(uid)].iloc[0]
     
     sub_id = str(user_row.get('subscription_id', ''))
     current_plan_id = str(user_row.get('plan_id', ''))
+    # ★ チャンネルURLを表示してあげる
+    channel_url = str(user_row.get('チャンネルURL', ''))
+    
     is_subscribed = (sub_id != "" and sub_id.lower() != "nan" and sub_id.lower() != "none")
 
     if menu == "通知設定":
@@ -401,6 +498,15 @@ def main():
         if is_subscribed:
             if current_plan_id == PLANS["full"]["id"]: st.info("💎 **フルプラン契約中**")
             elif current_plan_id == PLANS["light"]["id"]: st.info("💡 **ライトプラン契約中**")
+            
+            # 通知先情報の表示
+            with st.expander("📡 あなたの通知チャンネル"):
+                if channel_url:
+                    st.success("✅ Discord連携済み")
+                    st.write("このWebhook URLに通知が届きます（Bot側で自動設定されます）")
+                    st.code(channel_url)
+                else:
+                    st.warning("⚠️ チャンネル情報が登録されていません。管理者に問い合わせてください。")
         else:
             st.warning("⚠️ プラン未契約です")
 
@@ -443,7 +549,6 @@ def main():
             with st.form("pay_form"):
                 st.write("クレジットカード情報")
                 c1, c2 = st.columns(2)
-                # ★修正：本番用に一般的なプレースホルダーに変更
                 card_no = c1.text_input("カード番号", max_chars=16, placeholder="1234567812345678")
                 holder = c2.text_input("名義", placeholder="TARO YAMADA")
                 c3, c4 = st.columns(2)
@@ -476,7 +581,7 @@ def main():
                         if "errors" in res_card:
                             st.error(f"カード登録エラー: {res_card['errors'][0]['error_message']}")
                         else:
-                            # 3. サブスク開始 (デバッグログ対応)
+                            # 3. サブスク開始
                             suc, res_sub, req_data, res_raw = fincode_create_subscription(f_cust_id, selected_plan["id"])
                             if suc:
                                 update_user_fincode_data(client, uid, subscription_id=res_sub, plan_id=selected_plan["id"])
