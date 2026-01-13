@@ -187,29 +187,29 @@ def fincode_register_customer(user_id):
     response = requests.post(url, json=data, headers=HEADERS)
     return response.json()
 
-# ★追加: 顧客のカード一覧を取得し、全て削除する関数
-def fincode_clear_cards(customer_id):
-    """登録されているカードを全て削除する（5枚制限対策）"""
-    # 1. カード一覧取得
+# ★強化版: カード削除関数
+def fincode_clear_cards_aggressive(customer_id):
+    """登録されているカードを強制的に全て削除する"""
     list_url = f"{FINCODE_BASE_URL}/customers/{customer_id}/cards"
     res = requests.get(list_url, headers=HEADERS)
-    if res.status_code != 200:
-        return # 取得失敗なら何もしない
+    if res.status_code != 200: return False
     
     cards_data = res.json()
-    if "list" not in cards_data:
-        return
-
-    # 2. 全削除
-    for card in cards_data["list"]:
-        card_id = card["id"]
-        del_url = f"{FINCODE_BASE_URL}/customers/{customer_id}/cards/{card_id}"
-        requests.delete(del_url, headers=HEADERS)
-
-def fincode_register_card(customer_id, card_no, expire, security_code, holder_name):
-    # ★追加: 登録前に既存カードを一掃する
-    fincode_clear_cards(customer_id)
+    card_list = cards_data.get("list", [])
     
+    if not card_list: return True # 削除するものがない
+    
+    st.toast(f"🔄 古いカード情報({len(card_list)}枚)を整理中...")
+    
+    for card in card_list:
+        del_url = f"{list_url}/{card['id']}"
+        requests.delete(del_url, headers=HEADERS)
+        time.sleep(0.3) # API制限回避
+        
+    return True
+
+# ★強化版: カード登録関数 (自動リトライ付き)
+def fincode_register_card(customer_id, card_no, expire, security_code, holder_name):
     url = f"{FINCODE_BASE_URL}/customers/{customer_id}/cards"
     data = {
         "default_flag": "1",
@@ -219,8 +219,23 @@ def fincode_register_card(customer_id, card_no, expire, security_code, holder_na
         "security_code": security_code,
         "holder_name": holder_name
     }
+    
+    # 1. まずは登録を試みる
     response = requests.post(url, json=data, headers=HEADERS)
-    return response.json()
+    res_json = response.json()
+    
+    # 2. 「枚数超過」エラーが出たら、削除してから再トライ
+    if "errors" in res_json:
+        err_msg = res_json["errors"][0]["error_message"]
+        if "枚を超えています" in err_msg or "limit" in err_msg.lower():
+            # 削除実行
+            fincode_clear_cards_aggressive(customer_id)
+            # 再トライ
+            time.sleep(1)
+            response = requests.post(url, json=data, headers=HEADERS)
+            return response.json()
+            
+    return res_json
 
 def fincode_create_subscription(customer_id, plan_id):
     url = f"{FINCODE_BASE_URL}/subscriptions"
@@ -755,6 +770,7 @@ def main():
                                 f_cust_id = res["id"]
                                 update_user_fincode_data(client, uid, fincode_id=f_cust_id)
 
+                        # カード登録 (★ここで自動削除が走ります)
                         res_card = fincode_register_card(f_cust_id, card_no, expire, cvc, holder)
                         if "errors" in res_card:
                             st.error(f"カードエラー: {res_card['errors'][0]['error_message']}")
@@ -844,6 +860,7 @@ def main():
                                 f_cust_id = res["id"]
                                 update_user_fincode_data(client, uid, fincode_id=f_cust_id)
 
+                        # カード登録 (★ここで自動削除が走ります)
                         res_card = fincode_register_card(f_cust_id, card_no, expire, cvc, holder)
                         if "errors" in res_card:
                             st.error(f"カード登録エラー: {res_card['errors'][0]['error_message']}")
