@@ -187,28 +187,23 @@ def fincode_register_customer(user_id):
     response = requests.post(url, json=data, headers=HEADERS)
     return response.json()
 
-# ★強化版: カード削除関数
 def fincode_clear_cards_aggressive(customer_id):
-    """登録されているカードを強制的に全て削除する"""
     list_url = f"{FINCODE_BASE_URL}/customers/{customer_id}/cards"
     res = requests.get(list_url, headers=HEADERS)
     if res.status_code != 200: return False
     
     cards_data = res.json()
     card_list = cards_data.get("list", [])
-    
-    if not card_list: return True # 削除するものがない
+    if not card_list: return True 
     
     st.toast(f"🔄 古いカード情報({len(card_list)}枚)を整理中...")
-    
     for card in card_list:
         del_url = f"{list_url}/{card['id']}"
         requests.delete(del_url, headers=HEADERS)
-        time.sleep(0.3) # API制限回避
+        time.sleep(0.3)
         
     return True
 
-# ★強化版: カード登録関数 (自動リトライ付き)
 def fincode_register_card(customer_id, card_no, expire, security_code, holder_name):
     url = f"{FINCODE_BASE_URL}/customers/{customer_id}/cards"
     data = {
@@ -220,17 +215,13 @@ def fincode_register_card(customer_id, card_no, expire, security_code, holder_na
         "holder_name": holder_name
     }
     
-    # 1. まずは登録を試みる
     response = requests.post(url, json=data, headers=HEADERS)
     res_json = response.json()
     
-    # 2. 「枚数超過」エラーが出たら、削除してから再トライ
     if "errors" in res_json:
         err_msg = res_json["errors"][0]["error_message"]
         if "枚を超えています" in err_msg or "limit" in err_msg.lower():
-            # 削除実行
             fincode_clear_cards_aggressive(customer_id)
-            # 再トライ
             time.sleep(1)
             response = requests.post(url, json=data, headers=HEADERS)
             return response.json()
@@ -284,14 +275,44 @@ def fincode_cancel_subscription(subscription_id):
 def hash_password(password):
     return hashlib.sha256(str(password).encode('utf-8')).hexdigest()
 
+# ★ 修正: シートの列数とヘッダーを自動修復する機能を追加
 def ensure_users_sheet(client):
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
+        
+        # 1. ワークシートの取得または作成
         try:
-            sh.worksheet(USERS_SHEET_NAME)
+            ws = sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
             ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=9)
-            ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until']) 
+            ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until'])
+            return
+
+        # 2. 列数が足りない場合は拡張する
+        if ws.col_count < 9:
+            ws.resize(cols=9)
+            st.toast("シートの列数を拡張しました (Fix)")
+
+        # 3. ヘッダー行の補完 (カラム名がない問題を修正)
+        headers = ws.row_values(1)
+        # 期待するヘッダー構成
+        expected_headers = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until']
+        
+        # ヘッダーが足りない、または空文字の場合に埋める
+        needs_update = False
+        if len(headers) < 9:
+            headers += [""] * (9 - len(headers)) # 長さを合わせる
+            needs_update = True
+        
+        for i, h in enumerate(expected_headers):
+            if i < len(headers) and headers[i] == "":
+                headers[i] = h
+                needs_update = True
+        
+        if needs_update:
+            ws.update('A1:I1', [headers])
+            st.toast("シートのヘッダー名を修復しました (Fix)")
+
     except Exception as e:
         st.error(f"ユーザーDB初期化エラー: {e}")
 
@@ -770,7 +791,6 @@ def main():
                                 f_cust_id = res["id"]
                                 update_user_fincode_data(client, uid, fincode_id=f_cust_id)
 
-                        # カード登録 (★ここで自動削除が走ります)
                         res_card = fincode_register_card(f_cust_id, card_no, expire, cvc, holder)
                         if "errors" in res_card:
                             st.error(f"カードエラー: {res_card['errors'][0]['error_message']}")
@@ -860,7 +880,6 @@ def main():
                                 f_cust_id = res["id"]
                                 update_user_fincode_data(client, uid, fincode_id=f_cust_id)
 
-                        # カード登録 (★ここで自動削除が走ります)
                         res_card = fincode_register_card(f_cust_id, card_no, expire, cvc, holder)
                         if "errors" in res_card:
                             st.error(f"カード登録エラー: {res_card['errors'][0]['error_message']}")
