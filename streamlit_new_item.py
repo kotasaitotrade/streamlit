@@ -187,7 +187,29 @@ def fincode_register_customer(user_id):
     response = requests.post(url, json=data, headers=HEADERS)
     return response.json()
 
+# ★追加: 顧客のカード一覧を取得し、全て削除する関数
+def fincode_clear_cards(customer_id):
+    """登録されているカードを全て削除する（5枚制限対策）"""
+    # 1. カード一覧取得
+    list_url = f"{FINCODE_BASE_URL}/customers/{customer_id}/cards"
+    res = requests.get(list_url, headers=HEADERS)
+    if res.status_code != 200:
+        return # 取得失敗なら何もしない
+    
+    cards_data = res.json()
+    if "list" not in cards_data:
+        return
+
+    # 2. 全削除
+    for card in cards_data["list"]:
+        card_id = card["id"]
+        del_url = f"{FINCODE_BASE_URL}/customers/{customer_id}/cards/{card_id}"
+        requests.delete(del_url, headers=HEADERS)
+
 def fincode_register_card(customer_id, card_no, expire, security_code, holder_name):
+    # ★追加: 登録前に既存カードを一掃する
+    fincode_clear_cards(customer_id)
+    
     url = f"{FINCODE_BASE_URL}/customers/{customer_id}/cards"
     data = {
         "default_flag": "1",
@@ -226,9 +248,15 @@ def fincode_update_subscription(subscription_id, plan_id):
         return False, res["errors"][0]["error_message"]
     return True, "変更完了"
 
+def fincode_get_subscription(subscription_id):
+    url = f"{FINCODE_BASE_URL}/subscriptions/{subscription_id}"
+    res = requests.get(url, headers=HEADERS)
+    if res.status_code == 200:
+        return res.json()
+    return None
+
 def fincode_cancel_subscription(subscription_id):
     url = f"{FINCODE_BASE_URL}/subscriptions/{subscription_id}"
-    # ★修正: 削除時も pay_type が必須
     params = {"pay_type": "Card"}
     res = requests.delete(url, headers=HEADERS, params=params).json()
     if "errors" in res:
@@ -247,8 +275,8 @@ def ensure_users_sheet(client):
         try:
             sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
-            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=8)
-            ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan']) 
+            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=9)
+            ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until']) 
     except Exception as e:
         st.error(f"ユーザーDB初期化エラー: {e}")
 
@@ -260,7 +288,7 @@ def get_users_df(_client):
         try:
             sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
             data = sheet.get_all_values()
-            cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan']
+            cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until']
             
             if len(data) < 2:
                 return pd.DataFrame(columns=cols)
@@ -296,7 +324,7 @@ def register_user(client, user_id, user_name, password):
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         hashed_pw = hash_password(password)
-        sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url, ""])
+        sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url, "", ""])
         get_users_df.clear()
         return True, "登録完了"
     except Exception as e: return False, f"保存エラー: {e}"
@@ -309,7 +337,7 @@ def login_user(client, login_input, password):
         return True, "成功", user_row.iloc[0]['ユーザーID'], user_row.iloc[0]['ユーザー名']
     else: return False, "パスワード違い", "", ""
 
-def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=None, plan_id=None, restriction_type=None):
+def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=None, plan_id=None, restriction_type=None, valid_until=None):
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
         ws = sh.worksheet(USERS_SHEET_NAME)
@@ -319,6 +347,7 @@ def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=N
             if subscription_id is not None: ws.update_cell(cell.row, 5, subscription_id)
             if plan_id is not None: ws.update_cell(cell.row, 6, plan_id)
             if restriction_type is not None: ws.update_cell(cell.row, 8, restriction_type)
+            if valid_until is not None: ws.update_cell(cell.row, 9, valid_until)
             
             get_users_df.clear()
             return True
@@ -488,13 +517,28 @@ def main():
         st.stop()
         
     user_row = users_df[users_df['ユーザーID'] == str(uid)].iloc[0]
+    
     sub_id = str(user_row.get('subscription_id', ''))
     current_plan_id = str(user_row.get('plan_id', ''))
     channel_url = str(user_row.get('チャンネルURL', ''))
     restriction_type = str(user_row.get('plan', 'all'))
     if not restriction_type: restriction_type = 'all'
+    
+    valid_until_str = str(user_row.get('valid_until', '')).strip()
+    is_period_active = False
+    
+    if valid_until_str:
+        try:
+            v_date_str = valid_until_str.split(' ')[0] 
+            v_date = datetime.strptime(v_date_str, '%Y/%m/%d')
+            now_jst = datetime.now(timezone(timedelta(hours=9)))
+            if now_jst.date() <= v_date.date():
+                is_period_active = True
+        except:
+            pass
 
-    is_subscribed = (sub_id != "" and sub_id.lower() != "nan" and sub_id.lower() != "none")
+    has_active_subscription = (sub_id != "" and sub_id.lower() != "nan" and sub_id.lower() != "none")
+    is_access_allowed = has_active_subscription or is_period_active
 
     opt_ids = [PLANS["full"]["opt_id"], PLANS["light"]["opt_id"]]
     has_option = (current_plan_id in opt_ids)
@@ -511,10 +555,13 @@ def main():
     if menu == "通知設定":
         st.subheader("📢 通知条件の設定")
 
-        if not is_subscribed:
+        if not is_access_allowed:
             st.error("⚠️ この機能を利用するにはプラン契約が必要です")
             st.info("左側のメニュー「プラン契約・解約」から、プランへの加入手続きを行ってください。")
             st.stop()
+        
+        if not has_active_subscription and is_period_active:
+            st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) までは機能をご利用いただけます。")
 
         allowed_opts = get_allowed_options(client, restriction_type)
         
@@ -565,8 +612,8 @@ def main():
     elif menu == "プラン契約・解約":
         st.subheader("💳 サブスクリプション管理")
         
-        if is_subscribed:
-            st.success("✅ **現在プラン契約中です**")
+        if has_active_subscription:
+            st.success("✅ **現在プラン契約中です** (次回更新あり)")
             
             current_plan_name = "不明"
             is_full = False
@@ -639,14 +686,88 @@ def main():
             st.markdown("---")
             if st.button("プランを解約する"):
                 with st.spinner("解約処理中..."):
+                    sub_detail = fincode_get_subscription(sub_id)
+                    next_charge = ""
+                    if sub_detail and "next_charge_date" in sub_detail:
+                        next_charge = sub_detail["next_charge_date"]
+                    
                     suc, msg = fincode_cancel_subscription(sub_id)
+                    
                     if suc:
-                        update_user_fincode_data(client, uid, subscription_id="", plan_id="", restriction_type="")
-                        st.success("解約が完了しました。")
-                        time.sleep(2)
+                        update_user_fincode_data(client, uid, subscription_id="", valid_until=next_charge)
+                        st.success(f"解約予約を受け付けました。{next_charge} までは引き続きご利用いただけます。")
+                        time.sleep(3)
                         st.rerun()
                     else:
                         st.error(f"解約エラー: {msg}")
+
+        elif not has_active_subscription and is_period_active:
+            st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) までは現在のプランをご利用いただけます。")
+            st.info("再度契約を再開したい場合は、以下からプランを選択して新規契約を行ってください。")
+            
+            plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['base_price']:,}/月")
+            selected_plan = PLANS[plan_key]
+            
+            selected_restriction = "all"
+            if plan_key == "light":
+                st.markdown("👇 **通知を受け取るカテゴリを選択してください**")
+                sub_choice = st.radio(
+                    "カテゴリ選択", 
+                    ["apparel", "not_apparel"], 
+                    format_func=lambda x: "👜 アパレル" if x == "apparel" else "📷 アパレル以外"
+                )
+                selected_restriction = sub_choice
+            
+            st.markdown("---")
+            use_option = st.checkbox(f"✨ **キーワード通知オプションを追加する (+¥{OPTION_PRICE:,})**")
+            
+            final_price = selected_plan['base_price'] + (OPTION_PRICE if use_option else 0)
+            target_plan_id = selected_plan['opt_id'] if use_option else selected_plan['base_id']
+
+            st.write(f"**選択中: {selected_plan['name']}**")
+            st.subheader(f"ご請求額: ¥{final_price:,} / 月")
+            
+            with st.form("pay_form_restart"):
+                st.write("クレジットカード情報")
+                c1, c2 = st.columns(2)
+                card_no = c1.text_input("カード番号", max_chars=16, placeholder="1234567812345678")
+                holder = c2.text_input("名義", placeholder="TARO YAMADA")
+                c3, c4 = st.columns(2)
+                expire = c3.text_input("有効期限 (YYMM)", max_chars=4, placeholder="2512")
+                cvc = c4.text_input("セキュリティコード", type="password", max_chars=4)
+                submitted = st.form_submit_button(f"¥{final_price:,} で定期購読を再開")
+            
+            if submitted:
+                if not (card_no and holder and expire and cvc):
+                    st.error("入力不足")
+                else:
+                    if not FINCODE_API_KEY: st.error("APIエラー"); st.stop()
+                    with st.spinner("処理中..."):
+                        f_cust_id = str(user_row.get('fincode_customer_id', ''))
+                        if f_cust_id in ["", "nan", "None"]:
+                            res = fincode_register_customer(uid)
+                            if "errors" in res:
+                                if "既に登録" in res["errors"][0]["error_message"] or "exist" in res["errors"][0]["error_message"].lower():
+                                    f_cust_id = str(uid)
+                                    update_user_fincode_data(client, uid, fincode_id=f_cust_id)
+                                else: st.error(res["errors"][0]["error_message"]); st.stop()
+                            else:
+                                f_cust_id = res["id"]
+                                update_user_fincode_data(client, uid, fincode_id=f_cust_id)
+
+                        res_card = fincode_register_card(f_cust_id, card_no, expire, cvc, holder)
+                        if "errors" in res_card:
+                            st.error(f"カードエラー: {res_card['errors'][0]['error_message']}")
+                        else:
+                            suc, res_sub, req_data, res_raw = fincode_create_subscription(f_cust_id, target_plan_id)
+                            if suc:
+                                update_user_fincode_data(client, uid, subscription_id=res_sub, plan_id=target_plan_id, restriction_type=selected_restriction, valid_until="")
+                                st.balloons()
+                                st.success("サブスクリプションを再開しました！")
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error(f"契約エラー: {res_sub}")
 
         else:
             st.info("利用を開始するには、以下のプランから選択してください。")
@@ -729,7 +850,7 @@ def main():
                         else:
                             suc, res_sub, req_data, res_raw = fincode_create_subscription(f_cust_id, target_plan_id)
                             if suc:
-                                update_user_fincode_data(client, uid, subscription_id=res_sub, plan_id=target_plan_id, restriction_type=selected_restriction)
+                                update_user_fincode_data(client, uid, subscription_id=res_sub, plan_id=target_plan_id, restriction_type=selected_restriction, valid_until="")
                                 st.balloons()
                                 st.success("サブスクリプションを開始しました！")
                                 time.sleep(2)
