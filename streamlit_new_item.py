@@ -604,6 +604,10 @@ def main():
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
         display_df = user_df[['検索条件', 'キーワード']] if '検索条件' in user_df.columns else pd.DataFrame(columns=['検索条件', 'キーワード'])
         
+        # ★ ここでインデックスをリセットしてクリーンな状態にする
+        if not display_df.empty:
+            display_df = display_df.reset_index(drop=True)
+
         if current_plan_id.startswith(PLANS["full"]["base_id"]) or current_plan_id == PLANS["full"]["opt_id"]:
              st.info("💎 **フルプラン契約中**")
         elif current_plan_id.startswith(PLANS["light"]["base_id"]) or current_plan_id == PLANS["light"]["opt_id"]:
@@ -625,13 +629,13 @@ def main():
             else:
                 st.warning("⚠️ チャンネル情報が登録されていません。")
 
+        # ★ エラーの原因となった行を削除し、hide_index=True のみに修正
         edited = st.data_editor(
             display_df, 
             num_rows="dynamic", 
             use_container_width=True, 
             hide_index=True,
             column_config={
-                "_index": st.column_config.Column(hidden=True),
                 "検索条件": st.column_config.SelectboxColumn(
                     options=allowed_opts, 
                     required=True
