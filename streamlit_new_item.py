@@ -631,6 +631,7 @@ def main():
             use_container_width=True, 
             hide_index=True,
             column_config={
+                "_index": st.column_config.Column(hidden=True),
                 "検索条件": st.column_config.SelectboxColumn(
                     options=allowed_opts, 
                     required=True
