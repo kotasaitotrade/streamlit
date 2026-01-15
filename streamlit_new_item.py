@@ -13,7 +13,7 @@ from google.oauth2.credentials import Credentials
 from gspread.exceptions import APIError
 
 # ==========================================
-#  設定・定数
+#   設定・定数
 # ==========================================
 CREDENTIALS_PATH = 'google_credentials.json'
 TOKEN_PATH = 'gspread_token.json'
@@ -60,7 +60,7 @@ SCOPES = [
 st.set_page_config(page_title="通知設定マネージャー", layout="wide")
 
 # ==========================================
-#  Secrets & 認証処理
+#   Secrets & 認証処理
 # ==========================================
 def create_json_from_secrets():
     def recursive_dict(d):
@@ -133,7 +133,7 @@ def show_tokushoho():
         """)
 
 # ==========================================
-#  Discord API連携
+#   Discord API連携
 # ==========================================
 def create_discord_channel_and_webhook(user_discord_id, user_name):
     if not DISCORD_BOT_TOKEN or not DISCORD_GUILD_ID:
@@ -179,7 +179,7 @@ def create_discord_channel_and_webhook(user_discord_id, user_name):
     return True, webhook_data["url"]
 
 # ==========================================
-#  Fincode API
+#   Fincode API
 # ==========================================
 def fincode_register_customer(user_id):
     url = f"{FINCODE_BASE_URL}/customers"
@@ -270,7 +270,7 @@ def fincode_cancel_subscription(subscription_id):
     return True, "解約しました"
 
 # ==========================================
-#  ユーザー管理・DB操作
+#   ユーザー管理・DB操作
 # ==========================================
 def hash_password(password):
     return hashlib.sha256(str(password).encode('utf-8')).hexdigest()
@@ -392,7 +392,7 @@ def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=N
         return False
 
 # ==========================================
-#  通知設定用
+#   通知設定用
 # ==========================================
 @st.cache_data(ttl=60)
 def get_choices_df(_client):
@@ -503,7 +503,7 @@ def save_merged_data(client, full_df, edited_display_df, user_id, restriction_ty
         return None
 
 # ==========================================
-#  メイン
+#   メイン
 # ==========================================
 def main():
     st.title("🔔 通知設定＆サブスク管理")
@@ -629,6 +629,7 @@ def main():
             display_df, 
             num_rows="dynamic", 
             use_container_width=True, 
+            hide_index=True,
             column_config={
                 "検索条件": st.column_config.SelectboxColumn(
                     options=allowed_opts, 
