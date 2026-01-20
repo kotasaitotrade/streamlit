@@ -275,7 +275,6 @@ def fincode_cancel_subscription(subscription_id):
 def hash_password(password):
     return hashlib.sha256(str(password).encode('utf-8')).hexdigest()
 
-# ★ 修正: シートの列数とヘッダーを自動修復する機能を追加
 def ensure_users_sheet(client):
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
@@ -372,6 +371,23 @@ def login_user(client, login_input, password):
     if user_row.iloc[0]['パスワードハッシュ'] == hash_password(password):
         return True, "成功", user_row.iloc[0]['ユーザーID'], user_row.iloc[0]['ユーザー名']
     else: return False, "パスワード違い", "", ""
+
+# ★ パスワード更新用関数を追加
+def update_user_password(client, user_id, new_password):
+    try:
+        sh = client.open_by_key(SPREADSHEET_ID)
+        ws = sh.worksheet(USERS_SHEET_NAME)
+        # ユーザーIDで検索
+        cell = ws.find(str(user_id))
+        if cell:
+            # パスワードハッシュは3列目（C列）
+            new_hash = hash_password(new_password)
+            ws.update_cell(cell.row, 3, new_hash)
+            get_users_df.clear()
+            return True, "パスワードを変更しました"
+        return False, "ユーザーが見つかりません"
+    except Exception as e:
+        return False, f"更新エラー: {e}"
 
 def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=None, plan_id=None, restriction_type=None, valid_until=None):
     try:
@@ -579,9 +595,10 @@ def main():
     opt_ids = [PLANS["full"]["opt_id"], PLANS["light"]["opt_id"]]
     has_option = (current_plan_id in opt_ids)
 
+    # ★ メニューの追加
     with st.sidebar:
         st.write(f"User: **{uname}**")
-        menu = st.radio("メニュー", ["通知設定", "プラン契約・解約"])
+        menu = st.radio("メニュー", ["通知設定", "プラン契約・解約", "アカウント設定"])
         if st.button("ログアウト"):
             st.session_state['logged_in_user_id'] = None
             st.rerun()
@@ -628,14 +645,14 @@ def main():
             else:
                 st.warning("⚠️ チャンネル情報が登録されていません。")
 
-        # ★ 修正: インデックスを強制非表示
+        # インデックス非表示の修正を含む
         edited = st.data_editor(
             display_df, 
             num_rows="dynamic", 
             use_container_width=True, 
             hide_index=True,
             column_config={
-                "_index": None, # ★ ここでインデックス列を非表示に
+                "_index": None,
                 "検索条件": st.column_config.SelectboxColumn(
                     options=allowed_opts, 
                     required=True
@@ -829,14 +846,6 @@ def main():
             st.markdown("---")
             use_option = st.checkbox(f"✨ **キーワード通知オプションを追加する (+¥{OPTION_PRICE:,})**")
             
-            st.caption("""
-            **【オプション機能説明】**
-            サイトから抽出した **商品名、ブランド、型番** の中に、設定したキーワード（カンマ区切りで最大20単語）と一致する文字列がある商品だけを通知するフィルタリング機能です。
-            
-            * ✅ **チェックあり:** キーワードにヒットした商品のみ通知されます。
-            * ⬜ **チェックなし:** カテゴリ内の新着商品はすべて通知されます。
-            """)
-
             final_price = selected_plan['base_price'] + (OPTION_PRICE if use_option else 0)
             target_plan_id = selected_plan['opt_id'] if use_option else selected_plan['base_id']
 
@@ -899,6 +908,36 @@ def main():
                                 st.rerun()
                             else:
                                 st.error(f"契約エラー: {res_sub}")
+
+    # ★ アカウント設定（パスワード変更）メニュー
+    elif menu == "アカウント設定":
+        st.subheader("🔑 パスワードの変更")
+        st.info("セキュリティのため、定期的な変更をおすすめします。")
+
+        with st.form("password_reset_form"):
+            current_pw = st.text_input("現在のパスワード", type="password")
+            new_pw = st.text_input("新しいパスワード", type="password")
+            new_pw_confirm = st.text_input("新しいパスワード（確認）", type="password")
+            
+            submit_pw = st.form_submit_button("パスワードを変更する")
+
+        if submit_pw:
+            if not current_pw or not new_pw or not new_pw_confirm:
+                st.error("全ての項目を入力してください")
+            elif new_pw != new_pw_confirm:
+                st.error("新しいパスワードが一致しません")
+            else:
+                # 現在のパスワード確認
+                current_hash = user_row.get('パスワードハッシュ', '')
+                if hash_password(current_pw) != current_hash:
+                    st.error("現在のパスワードが間違っています")
+                else:
+                    with st.spinner("更新中..."):
+                        suc, msg = update_user_password(client, uid, new_pw)
+                        if suc:
+                            st.success(msg)
+                        else:
+                            st.error(msg)
 
 if __name__ == "__main__":
     main()
