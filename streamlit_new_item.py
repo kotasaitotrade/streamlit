@@ -20,7 +20,7 @@ TOKEN_PATH = 'gspread_token.json'
 
 SPREADSHEET_ID = "1Y8VEVn95FOp5ELLtBiuUrB9m4S3qDSiX50G6aB88vnk"
 TARGET_SHEET_NAME = "ユーザー設定"
-USERS_SHEET_NAME = "ユーザー管理"
+USERS_SHEET_NAME = "ユーザー管理" # ★このシートにマシン情報を保存します
 CHOICES_SHEET_NAME = "管理"
 
 # ★ マシン設定 (割り当て先サーバー)
@@ -286,7 +286,7 @@ def ensure_users_sheet(client):
         try:
             ws = sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
-            # 列数を 10 に設定 (assigned_machine 追加のため)
+            # ★ 列数を 10 に設定 (assigned_machine を追加するため)
             ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=10)
             ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine'])
             return
@@ -298,7 +298,7 @@ def ensure_users_sheet(client):
 
         # 3. ヘッダー行の補完
         headers = ws.row_values(1)
-        # 期待するヘッダー構成 (assigned_machine 追加)
+        # ★ 期待するヘッダー構成 (assigned_machine を追加)
         expected_headers = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine']
         
         # ヘッダーが足りない、または空文字の場合に埋める
@@ -325,9 +325,10 @@ def get_users_df(_client):
     max_retries = 3
     for i in range(max_retries):
         try:
+            # ★ USERS_SHEET_NAME (ユーザー管理シート) を開く
             sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
             data = sheet.get_all_values()
-            # カラム定義に assigned_machine を追加
+            # カラム定義に assigned_machine を含める
             cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine']
             
             if len(data) < 2:
@@ -354,7 +355,7 @@ def register_user(client, user_id, user_name, password):
     if str(user_id) in users_df['ユーザーID'].values: return False, "ID重複"
     if str(user_name) in users_df['ユーザー名'].values: return False, "名前重複"
         
-    # ★ マシン割り当てロジック (負荷分散)
+    # ★ マシン割り当てロジック (ユーザー管理シートの状況を確認)
     # 現在の各マシンの利用者数をカウント
     count_m1 = len(users_df[users_df['assigned_machine'] == MACHINES[0]])
     count_m2 = len(users_df[users_df['assigned_machine'] == MACHINES[1]])
@@ -371,9 +372,10 @@ def register_user(client, user_id, user_name, password):
     except Exception as e: return False, f"Discordエラー: {e}"
 
     try:
+        # ★ USERS_SHEET_NAME (ユーザー管理シート) に保存
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         hashed_pw = hash_password(password)
-        # 最後に assigned_machine を追加して保存
+        # 最後に assigned_machine (決定したマシン名) を追加して保存
         sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url, "", "", assigned_machine])
         get_users_df.clear()
         return True, "登録完了"
