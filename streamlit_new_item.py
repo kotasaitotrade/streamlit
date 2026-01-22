@@ -23,6 +23,9 @@ TARGET_SHEET_NAME = "ユーザー設定"
 USERS_SHEET_NAME = "ユーザー管理"
 CHOICES_SHEET_NAME = "管理"
 
+# ★ マシン設定 (割り当て先サーバー)
+MACHINES = ["machine_1", "machine_2"]
+
 # Secrets読み込み
 try:
     DISCORD_BOT_TOKEN = st.secrets["discord"]["bot_token"]
@@ -283,24 +286,25 @@ def ensure_users_sheet(client):
         try:
             ws = sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
-            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=9)
-            ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until'])
+            # 列数を 10 に設定 (assigned_machine 追加のため)
+            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=10)
+            ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine'])
             return
 
-        # 2. 列数が足りない場合は拡張する
-        if ws.col_count < 9:
-            ws.resize(cols=9)
+        # 2. 列数が足りない場合は拡張する (10列必要)
+        if ws.col_count < 10:
+            ws.resize(cols=10)
             st.toast("シートの列数を拡張しました (Fix)")
 
-        # 3. ヘッダー行の補完 (カラム名がない問題を修正)
+        # 3. ヘッダー行の補完
         headers = ws.row_values(1)
-        # 期待するヘッダー構成
-        expected_headers = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until']
+        # 期待するヘッダー構成 (assigned_machine 追加)
+        expected_headers = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine']
         
         # ヘッダーが足りない、または空文字の場合に埋める
         needs_update = False
-        if len(headers) < 9:
-            headers += [""] * (9 - len(headers)) # 長さを合わせる
+        if len(headers) < 10:
+            headers += [""] * (10 - len(headers)) # 長さを合わせる
             needs_update = True
         
         for i, h in enumerate(expected_headers):
@@ -309,7 +313,7 @@ def ensure_users_sheet(client):
                 needs_update = True
         
         if needs_update:
-            ws.update('A1:I1', [headers])
+            ws.update('A1:J1', [headers])
             st.toast("シートのヘッダー名を修復しました (Fix)")
 
     except Exception as e:
@@ -323,7 +327,8 @@ def get_users_df(_client):
         try:
             sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
             data = sheet.get_all_values()
-            cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until']
+            # カラム定義に assigned_machine を追加
+            cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine']
             
             if len(data) < 2:
                 return pd.DataFrame(columns=cols)
@@ -345,9 +350,18 @@ def get_users_df(_client):
 def register_user(client, user_id, user_name, password):
     get_users_df.clear()
     users_df = get_users_df(client)
+    
     if str(user_id) in users_df['ユーザーID'].values: return False, "ID重複"
     if str(user_name) in users_df['ユーザー名'].values: return False, "名前重複"
         
+    # ★ マシン割り当てロジック (負荷分散)
+    # 現在の各マシンの利用者数をカウント
+    count_m1 = len(users_df[users_df['assigned_machine'] == MACHINES[0]])
+    count_m2 = len(users_df[users_df['assigned_machine'] == MACHINES[1]])
+    
+    # 人数が少ない方を割り当て (同数の場合は machine_1)
+    assigned_machine = MACHINES[0] if count_m1 <= count_m2 else MACHINES[1]
+
     webhook_url = ""
     try:
         with st.spinner("Discordチャンネルを作成中..."):
@@ -359,7 +373,8 @@ def register_user(client, user_id, user_name, password):
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         hashed_pw = hash_password(password)
-        sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url, "", ""])
+        # 最後に assigned_machine を追加して保存
+        sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url, "", "", assigned_machine])
         get_users_df.clear()
         return True, "登録完了"
     except Exception as e: return False, f"保存エラー: {e}"
@@ -372,7 +387,6 @@ def login_user(client, login_input, password):
         return True, "成功", user_row.iloc[0]['ユーザーID'], user_row.iloc[0]['ユーザー名']
     else: return False, "パスワード違い", "", ""
 
-# ★ パスワード更新用関数を追加
 def update_user_password(client, user_id, new_password):
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
