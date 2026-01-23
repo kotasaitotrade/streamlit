@@ -286,28 +286,31 @@ def ensure_users_sheet(client):
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
         
-        # 期待するヘッダー構成 (11列目に secret_key を追加)
-        expected_headers = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine', 'secret_key']
+        # セキュリティ強化: 失敗回数とロック日時を追加 (12, 13列目)
+        expected_headers = [
+            'ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 
+            'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 
+            'assigned_machine', 'secret_key', 'failed_count', 'locked_until'
+        ]
 
         # 1. ワークシートの取得または作成
         try:
             ws = sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
-            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=11)
+            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=13)
             ws.append_row(expected_headers)
             return
 
-        # 2. 列数が足りない場合は拡張する (11列必要)
-        if ws.col_count < 11:
-            ws.resize(cols=11)
-            # st.toast("シートの列数を拡張しました") # mainで呼ぶのでtoastでもOKだが、念のため削除またはprint
+        # 2. 列数が足りない場合は拡張する (13列必要)
+        if ws.col_count < 13:
+            ws.resize(cols=13)
             print("列数を拡張しました")
 
         # 3. ヘッダー行の補完
         headers = ws.row_values(1)
         needs_update = False
-        if len(headers) < 11:
-            headers += [""] * (11 - len(headers))
+        if len(headers) < 13:
+            headers += [""] * (13 - len(headers))
             needs_update = True
         
         for i, h in enumerate(expected_headers):
@@ -316,8 +319,7 @@ def ensure_users_sheet(client):
                 needs_update = True
         
         if needs_update:
-            ws.update('A1:K1', [headers])
-            # st.toast("シートのヘッダー名を修復しました")
+            ws.update('A1:M1', [headers])
             print("ヘッダーを修復しました")
 
     except Exception as e:
@@ -325,15 +327,18 @@ def ensure_users_sheet(client):
 
 @st.cache_data(ttl=60)
 def get_users_df(_client):
-    # ★修正点: ensure_users_sheet をここでは呼ばない
     max_retries = 3
     for i in range(max_retries):
         try:
             sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
             data = sheet.get_all_values()
             
-            # カラム定義 (11列)
-            cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine', 'secret_key']
+            # カラム定義 (13列)
+            cols = [
+                'ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 
+                'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 
+                'assigned_machine', 'secret_key', 'failed_count', 'locked_until'
+            ]
             
             if len(data) < 2:
                 return pd.DataFrame(columns=cols)
@@ -360,7 +365,6 @@ def register_user(client, user_id, user_name, password):
     if str(user_id) in users_df['ユーザーID'].values: return False, "ID重複"
     if str(user_name) in users_df['ユーザー名'].values: return False, "名前重複"
         
-    # マシン割り当てロジック
     count_m1 = len(users_df[users_df['assigned_machine'] == MACHINES[0]])
     count_m2 = len(users_df[users_df['assigned_machine'] == MACHINES[1]])
     assigned_machine = MACHINES[0] if count_m1 <= count_m2 else MACHINES[1]
@@ -376,28 +380,81 @@ def register_user(client, user_id, user_name, password):
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         hashed_pw = hash_password(password)
-        # 11列分確保: secret_keyは空文字
-        sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url, "", "", assigned_machine, ""])
+        # 13列分確保 (failed_count=0, locked_until="")
+        sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url, "", "", assigned_machine, "", "0", ""])
         get_users_df.clear()
         return True, "登録完了"
     except Exception as e: return False, f"保存エラー: {e}"
 
+# ★ セキュリティ強化: アカウントロック機能付きログイン処理
 def login_user(client, login_input, password):
-    users_df = get_users_df(client)
-    user_row = users_df[(users_df['ユーザーID'] == str(login_input)) | (users_df['ユーザー名'] == str(login_input))]
-    
-    if user_row.empty: 
-        return False, "ユーザーなし", "", "", ""
-    
-    stored_hash = user_row.iloc[0]['パスワードハッシュ']
-    if stored_hash == hash_password(password):
-        user_id = user_row.iloc[0]['ユーザーID']
-        user_name = user_row.iloc[0]['ユーザー名']
-        # シークレットキーを取得（2FA用）
-        secret_key = str(user_row.iloc[0].get('secret_key', '')).strip()
-        return True, "成功", user_id, user_name, secret_key
-    else: 
-        return False, "パスワード違い", "", "", ""
+    # 都度シート情報を取得（ロック状態の最新化のため）
+    try:
+        sh = client.open_by_key(SPREADSHEET_ID)
+        ws = sh.worksheet(USERS_SHEET_NAME)
+        
+        # ユーザーを検索
+        # ID列(A列=1) または 名前列(B列=2)
+        cell = ws.find(str(login_input))
+        if not cell:
+            return False, "ユーザーIDまたはパスワードが間違っています", "", "", ""
+        
+        # 行データを取得
+        row_values = ws.row_values(cell.row)
+        # 行の長さが足りない場合の補完
+        if len(row_values) < 13:
+            row_values += [""] * (13 - len(row_values))
+            
+        # カラムマッピング
+        user_id = row_values[0]
+        user_name = row_values[1]
+        stored_hash = row_values[2]
+        secret_key = row_values[10]
+        failed_count_str = row_values[11]
+        locked_until_str = row_values[12]
+
+        # 1. ロック状態の確認
+        JST = timezone(timedelta(hours=9))
+        now = datetime.now(JST)
+        
+        if locked_until_str:
+            try:
+                lock_time = datetime.strptime(locked_until_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=JST)
+                if now < lock_time:
+                    remain = int((lock_time - now).total_seconds() / 60)
+                    return False, f"アカウントはロックされています。あと約{remain}分後に再度お試しください。", "", "", ""
+            except:
+                pass # 日付形式エラー等は無視して続行
+        
+        # 2. パスワード確認
+        if stored_hash == hash_password(password):
+            # 成功時: 失敗回数リセット & ロック解除
+            if failed_count_str != "0" or locked_until_str != "":
+                ws.update_cell(cell.row, 12, "0")
+                ws.update_cell(cell.row, 13, "")
+            
+            return True, "成功", user_id, user_name, secret_key
+        else:
+            # 失敗時: カウントアップ
+            try:
+                current_fail = int(failed_count_str) if failed_count_str.isdigit() else 0
+            except:
+                current_fail = 0
+                
+            new_fail = current_fail + 1
+            ws.update_cell(cell.row, 12, str(new_fail))
+            
+            # 10回失敗でロック (30分間)
+            if new_fail >= 10:
+                lock_until = now + timedelta(minutes=30)
+                lock_str = lock_until.strftime('%Y-%m-%d %H:%M:%S')
+                ws.update_cell(cell.row, 13, lock_str)
+                return False, "ログインに連続して失敗したため、アカウントを一時的にロックしました（30分間）。", "", "", ""
+            
+            return False, "ユーザーIDまたはパスワードが間違っています", "", "", ""
+
+    except Exception as e:
+        return False, f"ログイン処理エラー: {e}", "", "", ""
 
 def update_user_password(client, user_id, new_password):
     try:
@@ -419,7 +476,6 @@ def update_user_secret(client, user_id, secret_key):
         ws = sh.worksheet(USERS_SHEET_NAME)
         cell = ws.find(str(user_id))
         if cell:
-            # secret_keyは11列目（K列）
             ws.update_cell(cell.row, 11, secret_key)
             get_users_df.clear()
             return True
@@ -565,7 +621,6 @@ def main():
     client = get_gspread_client()
     if not client: return
 
-    # ★修正点: ここでDB構造チェックを行う (キャッシュの外)
     ensure_users_sheet(client)
 
     # セッション状態の初期化
@@ -589,6 +644,7 @@ def main():
             st.subheader("🔐 2段階認証")
             st.info("認証アプリに表示されている6桁のコードを入力してください。")
             
+            # ★セキュリティ対策: 入力制限
             otp_code = st.text_input("認証コード", max_chars=6, key="otp_login")
             
             col1, col2 = st.columns([1, 1])
@@ -618,20 +674,20 @@ def main():
         # B. 通常のログイン画面
         tab1, tab2 = st.tabs(["🔑 ログイン", "✨ 新規登録"])
         with tab1:
-            l_input = st.text_input("ID / 名前", key="li")
-            l_pass = st.text_input("パスワード", type="password", key="lp")
+            # ★セキュリティ対策: 入力文字数制限
+            l_input = st.text_input("ID / 名前", key="li", max_chars=50)
+            l_pass = st.text_input("パスワード", type="password", key="lp", max_chars=50)
             if st.button("ログイン", type="primary"):
-                get_users_df.clear()
+                # ロック機能対応のため get_users_df.clear() は login_user 内で最新取得するため削除不要だが、
+                # 全体整合性のために残しても良い。ここではロジックを login_user に集約済み。
                 suc, msg, uid, uname, secret = login_user(client, l_input, l_pass)
                 if suc:
                     if secret and len(secret) > 0:
-                        # 2段階認証が設定されている場合 -> 一時保存して入力画面へ
                         st.session_state['temp_login_user_id'] = uid
                         st.session_state['temp_login_user_name'] = uname
                         st.session_state['temp_login_secret'] = secret
                         st.rerun()
                     else:
-                        # 2段階認証なし -> 即ログイン
                         st.session_state['logged_in_user_id'] = uid
                         st.session_state['logged_in_user_name'] = uname
                         st.rerun()
@@ -639,9 +695,9 @@ def main():
                     st.error(msg)
         with tab2:
             st.info("DiscordユーザーIDを入力してください")
-            r_id = st.text_input("Discord ID", key="ri")
-            r_name = st.text_input("表示名", key="rn")
-            r_pass = st.text_input("パスワード", type="password", key="rp")
+            r_id = st.text_input("Discord ID", key="ri", max_chars=50)
+            r_name = st.text_input("表示名", key="rn", max_chars=50)
+            r_pass = st.text_input("パスワード", type="password", key="rp", max_chars=50)
             if st.button("登録"):
                 if not r_id or not r_name or not r_pass: st.error("入力不足")
                 else:
@@ -673,7 +729,6 @@ def main():
     restriction_type = str(user_row.get('plan', 'all'))
     if not restriction_type: restriction_type = 'all'
     
-    # 現在の2FA設定状況
     user_secret_key = str(user_row.get('secret_key', '')).strip()
     
     valid_until_str = str(user_row.get('valid_until', '')).strip()
@@ -695,7 +750,6 @@ def main():
     opt_ids = [PLANS["full"]["opt_id"], PLANS["light"]["opt_id"]]
     has_option = (current_plan_id in opt_ids)
 
-    # ★ メニューの追加
     with st.sidebar:
         st.write(f"User: **{uname}**")
         menu = st.radio("メニュー", ["通知設定", "プラン契約・解約", "アカウント設定"])
@@ -745,7 +799,6 @@ def main():
             else:
                 st.warning("⚠️ チャンネル情報が登録されていません。")
 
-        # インデックス非表示の修正を含む
         edited = st.data_editor(
             display_df, 
             num_rows="dynamic", 
@@ -906,17 +959,17 @@ def main():
                         if f_cust_id in ["", "nan", "None"]:
                             res = fincode_register_customer(uid)
                             if "errors" in res:
-                                if "既に登録" in res["errors"][0]["error_message"] or "exist" in res["errors"][0]["error_message"].lower():
-                                    f_cust_id = str(uid)
-                                    update_user_fincode_data(client, uid, fincode_id=f_cust_id)
-                                else: st.error(res["errors"][0]["error_message"]); st.stop()
+                                # ★セキュリティ対策: エラー詳細を隠蔽
+                                st.error("顧客情報の登録に失敗しました。")
+                                st.stop()
                             else:
                                 f_cust_id = res["id"]
                                 update_user_fincode_data(client, uid, fincode_id=f_cust_id)
 
                         res_card = fincode_register_card(f_cust_id, card_no, expire, cvc, holder)
                         if "errors" in res_card:
-                            st.error(f"カードエラー: {res_card['errors'][0]['error_message']}")
+                            # ★セキュリティ対策: エラー詳細を隠蔽
+                            st.error("カード情報の登録に失敗しました。入力内容（番号・有効期限・CVC）をご確認ください。")
                         else:
                             suc, res_sub, req_data, res_raw = fincode_create_subscription(f_cust_id, target_plan_id)
                             if suc:
@@ -926,7 +979,7 @@ def main():
                                 time.sleep(2)
                                 st.rerun()
                             else:
-                                st.error(f"契約エラー: {res_sub}")
+                                st.error("決済処理に失敗しました。")
 
         else:
             st.info("利用を開始するには、以下のプランから選択してください。")
@@ -989,7 +1042,8 @@ def main():
                                     f_cust_id = str(uid)
                                     update_user_fincode_data(client, uid, fincode_id=f_cust_id)
                                 else:
-                                    st.error(error_msg)
+                                    # ★セキュリティ対策: エラー詳細を隠蔽
+                                    st.error("顧客登録エラーが発生しました。")
                                     st.stop()
                             else:
                                 f_cust_id = res["id"]
@@ -997,7 +1051,8 @@ def main():
 
                         res_card = fincode_register_card(f_cust_id, card_no, expire, cvc, holder)
                         if "errors" in res_card:
-                            st.error(f"カード登録エラー: {res_card['errors'][0]['error_message']}")
+                             # ★セキュリティ対策: エラー詳細を隠蔽 (クレジットマスター対策)
+                            st.error("カード情報の登録に失敗しました。入力内容（番号・有効期限・CVC）をご確認ください。")
                         else:
                             suc, res_sub, req_data, res_raw = fincode_create_subscription(f_cust_id, target_plan_id)
                             if suc:
@@ -1007,7 +1062,7 @@ def main():
                                 time.sleep(2)
                                 st.rerun()
                             else:
-                                st.error(f"契約エラー: {res_sub}")
+                                st.error("契約処理に失敗しました。")
 
     # ★ アカウント設定（パスワード変更・2段階認証）メニュー
     elif menu == "アカウント設定":
@@ -1056,17 +1111,14 @@ def main():
             st.warning("⚠️ **2段階認証は設定されていません**")
             st.write("設定すると、ログイン時に認証アプリ（Google Authenticatorなど）のコード入力が必要になります。")
             
-            # 設定用のセッション管理
             if '2fa_setup_secret' not in st.session_state:
                 st.session_state['2fa_setup_secret'] = pyotp.random_base32()
             
             secret = st.session_state['2fa_setup_secret']
             
-            # QRコード生成
             uri = pyotp.totp.TOTP(secret).provisioning_uri(name=uname, issuer_name="MyApp")
             qr_img = qrcode.make(uri)
             
-            # 画像をStreamlitで表示するためにバイト列に変換
             img_byte_arr = io.BytesIO()
             qr_img.save(img_byte_arr, format='PNG')
             img_byte_arr = img_byte_arr.getvalue()
@@ -1090,7 +1142,6 @@ def main():
                     if totp.verify(verify_code):
                         if update_user_secret(client, uid, secret):
                             st.success("🎉 2段階認証が有効になりました！")
-                            # セッションクリア
                             del st.session_state['2fa_setup_secret']
                             time.sleep(2)
                             st.rerun()
