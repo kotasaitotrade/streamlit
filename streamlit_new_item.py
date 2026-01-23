@@ -19,6 +19,10 @@ from gspread.exceptions import APIError
 # ==========================================
 #   設定・定数
 # ==========================================
+# ★ アプリのURL (決済完了後に戻ってくる場所)
+# Streamlit CloudのURLを正確に入力してください
+APP_BASE_URL = "https://discord-notify-tool.streamlit.app/"
+
 CREDENTIALS_PATH = 'google_credentials.json'
 TOKEN_PATH = 'gspread_token.json'
 
@@ -27,7 +31,7 @@ TARGET_SHEET_NAME = "ユーザー設定"
 USERS_SHEET_NAME = "ユーザー管理"
 CHOICES_SHEET_NAME = "管理"
 
-# ★ マシン設定 (割り当て先サーバー)
+# ★ マシン設定
 MACHINES = ["machine_1", "machine_2"]
 
 # Secrets読み込み
@@ -186,7 +190,7 @@ def create_discord_channel_and_webhook(user_discord_id, user_name):
     return True, webhook_data["url"]
 
 # ==========================================
-#   Fincode API
+#   Fincode API (3Dセキュア対応版)
 # ==========================================
 def fincode_register_customer(user_id):
     url = f"{FINCODE_BASE_URL}/customers"
@@ -194,61 +198,35 @@ def fincode_register_customer(user_id):
     response = requests.post(url, json=data, headers=HEADERS)
     return response.json()
 
-def fincode_clear_cards_aggressive(customer_id):
-    list_url = f"{FINCODE_BASE_URL}/customers/{customer_id}/cards"
-    res = requests.get(list_url, headers=HEADERS)
-    if res.status_code != 200: return False
+# ★ 3Dセキュア対応: 決済セッション作成
+def fincode_create_subscription_session(customer_id, plan_id, return_url):
+    url = f"{FINCODE_BASE_URL}/sessions"
     
-    cards_data = res.json()
-    card_list = cards_data.get("list", [])
-    if not card_list: return True 
+    # 成功時と失敗時の戻り先URL
+    # 成功時には ?session_id={id} が付与されて戻ってくる
+    success_url = return_url
+    cancel_url = return_url 
     
-    st.toast(f"🔄 古いカード情報({len(card_list)}枚)を整理中...")
-    for card in card_list:
-        del_url = f"{list_url}/{card['id']}"
-        requests.delete(del_url, headers=HEADERS)
-        time.sleep(0.3)
-        
-    return True
-
-def fincode_register_card(customer_id, card_no, expire, security_code, holder_name):
-    url = f"{FINCODE_BASE_URL}/customers/{customer_id}/cards"
     data = {
-        "default_flag": "1",
-        "token": None,
-        "card_no": card_no,
-        "expire": expire,
-        "security_code": security_code,
-        "holder_name": holder_name
-    }
-    
-    response = requests.post(url, json=data, headers=HEADERS)
-    res_json = response.json()
-    
-    if "errors" in res_json:
-        err_msg = res_json["errors"][0]["error_message"]
-        if "枚を超えています" in err_msg or "limit" in err_msg.lower():
-            fincode_clear_cards_aggressive(customer_id)
-            time.sleep(1)
-            response = requests.post(url, json=data, headers=HEADERS)
-            return response.json()
-            
-    return res_json
-
-def fincode_create_subscription(customer_id, plan_id):
-    url = f"{FINCODE_BASE_URL}/subscriptions"
-    JST = timezone(timedelta(hours=9))
-    today_str = datetime.now(JST).strftime('%Y/%m/%d')
-    data = {
-        "pay_type": "Card",
-        "plan_id": plan_id,
+        "transaction_type": "Subscription",
+        "success_url": success_url,
+        "cancel_url": cancel_url,
         "customer_id": customer_id,
-        "start_date": today_str
+        "plan_id": plan_id,
+        "guide_mail_send_flag": "1", # 決済完了メールを送る
+        "shop_service_name": "通知ツール"
     }
-    res = requests.post(url, json=data, headers=HEADERS).json()
-    if "errors" in res:
-        return False, res["errors"][0]["error_message"], data, res
-    return True, res["id"], data, res
+    
+    res = requests.post(url, json=data, headers=HEADERS)
+    return res.json()
+
+# ★ セッション情報の取得（決済完了確認用）
+def fincode_retrieve_session(session_id):
+    url = f"{FINCODE_BASE_URL}/sessions/{session_id}"
+    res = requests.get(url, headers=HEADERS)
+    if res.status_code == 200:
+        return res.json()
+    return None
 
 def fincode_update_subscription(subscription_id, plan_id):
     url = f"{FINCODE_BASE_URL}/subscriptions/{subscription_id}"
@@ -287,30 +265,28 @@ def ensure_users_sheet(client):
         sh = client.open_by_key(SPREADSHEET_ID)
         
         # セキュリティ強化: 失敗回数とロック日時を追加 (12, 13列目)
+        # さらに一時的な設定保存用のカラム(14列目)を追加：temp_plan_settings
         expected_headers = [
             'ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 
             'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 
-            'assigned_machine', 'secret_key', 'failed_count', 'locked_until'
+            'assigned_machine', 'secret_key', 'failed_count', 'locked_until', 'temp_plan_settings'
         ]
 
-        # 1. ワークシートの取得または作成
         try:
             ws = sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
-            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=13)
+            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=14)
             ws.append_row(expected_headers)
             return
 
-        # 2. 列数が足りない場合は拡張する (13列必要)
-        if ws.col_count < 13:
-            ws.resize(cols=13)
+        if ws.col_count < 14:
+            ws.resize(cols=14)
             print("列数を拡張しました")
 
-        # 3. ヘッダー行の補完
         headers = ws.row_values(1)
         needs_update = False
-        if len(headers) < 13:
-            headers += [""] * (13 - len(headers))
+        if len(headers) < 14:
+            headers += [""] * (14 - len(headers))
             needs_update = True
         
         for i, h in enumerate(expected_headers):
@@ -319,7 +295,7 @@ def ensure_users_sheet(client):
                 needs_update = True
         
         if needs_update:
-            ws.update('A1:M1', [headers])
+            ws.update('A1:N1', [headers])
             print("ヘッダーを修復しました")
 
     except Exception as e:
@@ -333,11 +309,11 @@ def get_users_df(_client):
             sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
             data = sheet.get_all_values()
             
-            # カラム定義 (13列)
+            # カラム定義 (14列)
             cols = [
                 'ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 
                 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 
-                'assigned_machine', 'secret_key', 'failed_count', 'locked_until'
+                'assigned_machine', 'secret_key', 'failed_count', 'locked_until', 'temp_plan_settings'
             ]
             
             if len(data) < 2:
@@ -346,7 +322,6 @@ def get_users_df(_client):
             current_cols = data[0]
             df = pd.DataFrame(data[1:], columns=current_cols).astype(str)
             
-            # 不足カラムを補完
             for c in cols:
                 if c not in df.columns: df[c] = ""
             return df
@@ -380,32 +355,25 @@ def register_user(client, user_id, user_name, password):
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         hashed_pw = hash_password(password)
-        # 13列分確保 (failed_count=0, locked_until="")
-        sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url, "", "", assigned_machine, "", "0", ""])
+        # 14列確保
+        sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url, "", "", assigned_machine, "", "0", "", ""])
         get_users_df.clear()
         return True, "登録完了"
     except Exception as e: return False, f"保存エラー: {e}"
 
-# ★ セキュリティ強化: アカウントロック機能付きログイン処理
 def login_user(client, login_input, password):
-    # 都度シート情報を取得（ロック状態の最新化のため）
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
         ws = sh.worksheet(USERS_SHEET_NAME)
         
-        # ユーザーを検索
-        # ID列(A列=1) または 名前列(B列=2)
         cell = ws.find(str(login_input))
         if not cell:
             return False, "ユーザーIDまたはパスワードが間違っています", "", "", ""
         
-        # 行データを取得
         row_values = ws.row_values(cell.row)
-        # 行の長さが足りない場合の補完
-        if len(row_values) < 13:
-            row_values += [""] * (13 - len(row_values))
+        if len(row_values) < 14:
+            row_values += [""] * (14 - len(row_values))
             
-        # カラムマッピング
         user_id = row_values[0]
         user_name = row_values[1]
         stored_hash = row_values[2]
@@ -413,7 +381,6 @@ def login_user(client, login_input, password):
         failed_count_str = row_values[11]
         locked_until_str = row_values[12]
 
-        # 1. ロック状態の確認
         JST = timezone(timedelta(hours=9))
         now = datetime.now(JST)
         
@@ -424,18 +391,14 @@ def login_user(client, login_input, password):
                     remain = int((lock_time - now).total_seconds() / 60)
                     return False, f"アカウントはロックされています。あと約{remain}分後に再度お試しください。", "", "", ""
             except:
-                pass # 日付形式エラー等は無視して続行
+                pass
         
-        # 2. パスワード確認
         if stored_hash == hash_password(password):
-            # 成功時: 失敗回数リセット & ロック解除
             if failed_count_str != "0" or locked_until_str != "":
                 ws.update_cell(cell.row, 12, "0")
                 ws.update_cell(cell.row, 13, "")
-            
             return True, "成功", user_id, user_name, secret_key
         else:
-            # 失敗時: カウントアップ
             try:
                 current_fail = int(failed_count_str) if failed_count_str.isdigit() else 0
             except:
@@ -444,7 +407,6 @@ def login_user(client, login_input, password):
             new_fail = current_fail + 1
             ws.update_cell(cell.row, 12, str(new_fail))
             
-            # 10回失敗でロック (30分間)
             if new_fail >= 10:
                 lock_until = now + timedelta(minutes=30)
                 lock_str = lock_until.strftime('%Y-%m-%d %H:%M:%S')
@@ -483,6 +445,27 @@ def update_user_secret(client, user_id, secret_key):
     except Exception as e:
         st.error(f"Secret保存エラー: {e}")
         return False
+
+# 決済前の設定（通知カテゴリなど）を一時保存する関数
+def update_user_temp_settings(client, user_id, restriction_type):
+    try:
+        sh = client.open_by_key(SPREADSHEET_ID)
+        ws = sh.worksheet(USERS_SHEET_NAME)
+        cell = ws.find(str(user_id))
+        if cell:
+            ws.update_cell(cell.row, 14, restriction_type) # 14列目
+            return True
+        return False
+    except: return False
+
+def get_user_temp_settings(client, user_id):
+    try:
+        users_df = get_users_df(client)
+        row = users_df[users_df['ユーザーID'] == str(user_id)]
+        if not row.empty:
+            return str(row.iloc[0].get('temp_plan_settings', 'all'))
+        return 'all'
+    except: return 'all'
 
 def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=None, plan_id=None, restriction_type=None, valid_until=None):
     try:
@@ -623,40 +606,98 @@ def main():
 
     ensure_users_sheet(client)
 
+    # ----------------------------------------
+    # ★ 決済完了後のコールバック処理 (最優先)
+    # ----------------------------------------
+    # Fincodeから戻ってきたとき、URLに ?session_id=... がついている
+    if "session_id" in st.query_params:
+        session_id = st.query_params["session_id"]
+        
+        with st.spinner("決済情報を確認中..."):
+            session_data = fincode_retrieve_session(session_id)
+            
+            if session_data and session_data.get("status") == "COMPLETED":
+                # 決済成功！
+                # セッション情報からユーザーを特定
+                f_cust_id = session_data.get("customer_id")
+                plan_id = session_data.get("plan_id")
+                # FincodeのサブスクリプションIDを取得 (sessionのlistに含まれる場合があるが、ここでは簡易的に処理)
+                # 注: Session APIのレスポンスには作成された subscription_id が含まれない場合があるため、
+                # 本来はWebhook等で受けるのが確実ですが、Streamlitの簡易実装として
+                # 「決済完了＝契約成立」とみなしてDB更新します。
+                
+                # ユーザーDBからFincode IDで逆引きしてユーザーIDを特定
+                users_df = get_users_df(client)
+                target_user = users_df[users_df['fincode_customer_id'] == f_cust_id]
+                
+                if not target_user.empty:
+                    uid = target_user.iloc[0]['ユーザーID']
+                    # 一時保存しておいた設定（通知カテゴリなど）を復元
+                    saved_restriction = target_user.iloc[0].get('temp_plan_settings', 'all')
+                    
+                    # subscription_id は Fincodeの顧客情報から最新のものを取得推奨だが
+                    # ここでは "sub_via_session" 等のマーカーを入れておくか、空にしておく
+                    # ※解約処理のために本来はIDが必要。ここでは簡易的に「有効期限切れ」を消す処理のみ行う
+                    
+                    # 契約情報を更新 (有効期限をクリアして即時有効化)
+                    # subscription_id は後でFincode管理画面等から確認するか、
+                    # 別途Fincode APIで顧客のサブスク一覧を取得して埋めるのがベスト
+                    # 今回はユーザー体験優先で「契約完了」ステータスにする
+                    
+                    # Fincode APIで最新のサブスクIDを取得してみる
+                    sub_list_res = requests.get(f"{FINCODE_BASE_URL}/subscriptions", params={"customer_id": f_cust_id}, headers=HEADERS)
+                    new_sub_id = ""
+                    if sub_list_res.status_code == 200:
+                        s_list = sub_list_res.json().get("list", [])
+                        if s_list:
+                            new_sub_id = s_list[0]["id"] # 最新のものを採用
+
+                    update_user_fincode_data(client, uid, subscription_id=new_sub_id, plan_id=plan_id, restriction_type=saved_restriction, valid_until="")
+                    
+                    st.balloons()
+                    st.success("🎉 お支払いが完了しました！プランが有効になりました。")
+                    
+                    # クエリパラメータを削除してリロード (Streamlitのお作法)
+                    time.sleep(3)
+                    st.query_params.clear()
+                    st.rerun()
+                else:
+                    st.error("ユーザー情報の照合に失敗しました。管理者にお問い合わせください。")
+            else:
+                st.error("決済が完了していません。もう一度お試しください。")
+                if st.button("トップへ戻る"):
+                    st.query_params.clear()
+                    st.rerun()
+        st.stop() # コールバック処理中はここで止める
+
+    # ----------------------------------------
+    # 以下、通常のアプリフロー
+    # ----------------------------------------
+
     # セッション状態の初期化
     if 'logged_in_user_id' not in st.session_state:
         st.session_state['logged_in_user_id'] = None
         st.session_state['logged_in_user_name'] = None
     
-    # 2段階認証の一時保存用
     if 'temp_login_user_id' not in st.session_state:
         st.session_state['temp_login_user_id'] = None
         st.session_state['temp_login_user_name'] = None
         st.session_state['temp_login_secret'] = None
 
-    # ----------------------------------------
-    # ログイン処理フロー
-    # ----------------------------------------
+    # ログイン処理
     if st.session_state['logged_in_user_id'] is None:
-        
-        # A. 2段階認証待ちの状態かどうか
         if st.session_state['temp_login_user_id'] is not None:
             st.subheader("🔐 2段階認証")
             st.info("認証アプリに表示されている6桁のコードを入力してください。")
-            
-            # ★セキュリティ対策: 入力制限
             otp_code = st.text_input("認証コード", max_chars=6, key="otp_login")
-            
             col1, col2 = st.columns([1, 1])
             with col1:
                 if st.button("認証する", type="primary"):
                     secret = st.session_state['temp_login_secret']
                     totp = pyotp.TOTP(secret)
                     if totp.verify(otp_code):
-                        # 認証成功 -> 本ログイン
                         st.session_state['logged_in_user_id'] = st.session_state['temp_login_user_id']
                         st.session_state['logged_in_user_name'] = st.session_state['temp_login_user_name']
-                        # 一時データをクリア
                         st.session_state['temp_login_user_id'] = None
                         st.session_state['temp_login_user_name'] = None
                         st.session_state['temp_login_secret'] = None
@@ -666,20 +707,14 @@ def main():
             with col2:
                 if st.button("キャンセル"):
                     st.session_state['temp_login_user_id'] = None
-                    st.session_state['temp_login_user_name'] = None
-                    st.session_state['temp_login_secret'] = None
                     st.rerun()
             st.stop()
 
-        # B. 通常のログイン画面
         tab1, tab2 = st.tabs(["🔑 ログイン", "✨ 新規登録"])
         with tab1:
-            # ★セキュリティ対策: 入力文字数制限
             l_input = st.text_input("ID / 名前", key="li", max_chars=50)
             l_pass = st.text_input("パスワード", type="password", key="lp", max_chars=50)
             if st.button("ログイン", type="primary"):
-                # ロック機能対応のため get_users_df.clear() は login_user 内で最新取得するため削除不要だが、
-                # 全体整合性のために残しても良い。ここではロジックを login_user に集約済み。
                 suc, msg, uid, uname, secret = login_user(client, l_input, l_pass)
                 if suc:
                     if secret and len(secret) > 0:
@@ -846,6 +881,7 @@ def main():
                 r_text = "👜 アパレルのみ" if restriction_type == "apparel" else "📷 アパレル以外のみ"
                 col1.write(f"**選択カテゴリ**: {r_text}")
             
+            # プラン変更は既存のまま (カード変更はFincode管理画面で行ってもらう等の運用が3DSでは一般的だが、ここではプラン変更のみ)
             with st.expander("🔄 プラン内容を変更する"):
                 st.info("プランのアップグレード・ダウングレードや、オプションの追加・解除ができます。")
                 
@@ -915,8 +951,9 @@ def main():
 
         elif not has_active_subscription and is_period_active:
             st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) までは現在のプランをご利用いただけます。")
-            st.info("再度契約を再開したい場合は、以下からプランを選択して新規契約を行ってください。")
+            st.info("再度契約を再開したい場合は、以下からプランを選択してください。")
             
+            # (以下、再契約のフロー。ここも3DS対応させる)
             plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['base_price']:,}/月")
             selected_plan = PLANS[plan_key]
             
@@ -939,47 +976,37 @@ def main():
             st.write(f"**選択中: {selected_plan['name']}**")
             st.subheader(f"ご請求額: ¥{final_price:,} / 月")
             
-            with st.form("pay_form_restart"):
-                st.write("クレジットカード情報")
-                c1, c2 = st.columns(2)
-                card_no = c1.text_input("カード番号", max_chars=16, placeholder="1234567812345678")
-                holder = c2.text_input("名義", placeholder="TARO YAMADA")
-                c3, c4 = st.columns(2)
-                expire = c3.text_input("有効期限 (YYMM)", max_chars=4, placeholder="2512")
-                cvc = c4.text_input("セキュリティコード", type="password", max_chars=4)
-                submitted = st.form_submit_button(f"¥{final_price:,} で定期購読を再開")
-            
-            if submitted:
-                if not (card_no and holder and expire and cvc):
-                    st.error("入力不足")
-                else:
-                    if not FINCODE_API_KEY: st.error("APIエラー"); st.stop()
-                    with st.spinner("処理中..."):
-                        f_cust_id = str(user_row.get('fincode_customer_id', ''))
-                        if f_cust_id in ["", "nan", "None"]:
-                            res = fincode_register_customer(uid)
-                            if "errors" in res:
-                                # ★セキュリティ対策: エラー詳細を隠蔽
-                                st.error("顧客情報の登録に失敗しました。")
-                                st.stop()
-                            else:
-                                f_cust_id = res["id"]
+            st.markdown("🔒 **安全な決済のため、Fincodeの決済画面へ移動します**")
+            if st.button("お支払い画面へ進む (3Dセキュア対応)"):
+                if not FINCODE_API_KEY: st.error("API設定エラー"); st.stop()
+                
+                with st.spinner("決済ページを準備中..."):
+                    # 1. 顧客IDの確認・作成
+                    f_cust_id = str(user_row.get('fincode_customer_id', ''))
+                    if f_cust_id in ["", "nan", "None"]:
+                        res = fincode_register_customer(uid)
+                        if "errors" in res:
+                            error_msg = res["errors"][0]["error_message"]
+                            if "既に登録" in error_msg or "exist" in error_msg.lower():
+                                f_cust_id = str(uid)
                                 update_user_fincode_data(client, uid, fincode_id=f_cust_id)
-
-                        res_card = fincode_register_card(f_cust_id, card_no, expire, cvc, holder)
-                        if "errors" in res_card:
-                            # ★セキュリティ対策: エラー詳細を隠蔽
-                            st.error("カード情報の登録に失敗しました。入力内容（番号・有効期限・CVC）をご確認ください。")
-                        else:
-                            suc, res_sub, req_data, res_raw = fincode_create_subscription(f_cust_id, target_plan_id)
-                            if suc:
-                                update_user_fincode_data(client, uid, subscription_id=res_sub, plan_id=target_plan_id, restriction_type=selected_restriction, valid_until="")
-                                st.balloons()
-                                st.success("サブスクリプションを再開しました！")
-                                time.sleep(2)
-                                st.rerun()
                             else:
-                                st.error("決済処理に失敗しました。")
+                                st.error("顧客登録エラー"); st.stop()
+                        else:
+                            f_cust_id = res["id"]
+                            update_user_fincode_data(client, uid, fincode_id=f_cust_id)
+                    
+                    # 2. 一時的に選択プラン情報を保存 (コールバック時に使う)
+                    update_user_temp_settings(client, uid, selected_restriction)
+                    
+                    # 3. 決済セッション作成
+                    session_res = fincode_create_subscription_session(f_cust_id, target_plan_id, APP_BASE_URL)
+                    
+                    if "errors" in session_res:
+                        st.error(f"エラー: {session_res['errors'][0]['error_message']}")
+                    else:
+                        link_url = session_res["link_url"]
+                        st.link_button("👉 ここをクリックして決済を完了させる", link_url, type="primary")
 
         else:
             st.info("利用を開始するには、以下のプランから選択してください。")
@@ -1013,69 +1040,53 @@ def main():
             
             st.subheader(f"ご請求額: ¥{final_price:,} / 月")
             
-            with st.form("pay_form"):
-                st.write("クレジットカード情報")
-                c1, c2 = st.columns(2)
-                card_no = c1.text_input("カード番号", max_chars=16, placeholder="1234567812345678")
-                holder = c2.text_input("名義", placeholder="TARO YAMADA")
-                c3, c4 = st.columns(2)
-                expire = c3.text_input("有効期限 (YYMM)", max_chars=4, placeholder="2512")
-                cvc = c4.text_input("セキュリティコード", type="password", max_chars=4)
-                
-                submitted = st.form_submit_button(f"¥{final_price:,} で定期購読を開始")
+            # ★ 3Dセキュア対応: フォーム入力ではなく、リダイレクトボタンに変更
+            st.markdown("🔒 **安全な決済のため、Fincodeの決済画面へ移動します**")
+            st.caption("※クレジットカード情報はFincodeが安全に管理し、当サイトには保存されません。")
             
-            if submitted:
-                if not (card_no and holder and expire and cvc):
-                    st.error("全ての項目を入力してください")
-                else:
-                    if not FINCODE_API_KEY:
-                        st.error("API設定エラー")
-                        st.stop()
+            if st.button("お支払い画面へ進む (3Dセキュア対応)"):
+                if not FINCODE_API_KEY:
+                    st.error("API設定エラー")
+                    st.stop()
 
-                    with st.spinner("処理中..."):
-                        f_cust_id = str(user_row.get('fincode_customer_id', ''))
-                        if f_cust_id in ["", "nan", "None"]:
-                            res = fincode_register_customer(uid)
-                            if "errors" in res:
-                                error_msg = res["errors"][0]["error_message"]
-                                if "既に登録" in error_msg or "exist" in error_msg.lower():
-                                    f_cust_id = str(uid)
-                                    update_user_fincode_data(client, uid, fincode_id=f_cust_id)
-                                else:
-                                    # ★セキュリティ対策: エラー詳細を隠蔽
-                                    st.error("顧客登録エラーが発生しました。")
-                                    st.stop()
-                            else:
-                                f_cust_id = res["id"]
+                with st.spinner("決済ページを準備中..."):
+                    # 1. 顧客ID確保
+                    f_cust_id = str(user_row.get('fincode_customer_id', ''))
+                    if f_cust_id in ["", "nan", "None"]:
+                        res = fincode_register_customer(uid)
+                        if "errors" in res:
+                            error_msg = res["errors"][0]["error_message"]
+                            if "既に登録" in error_msg or "exist" in error_msg.lower():
+                                f_cust_id = str(uid)
                                 update_user_fincode_data(client, uid, fincode_id=f_cust_id)
-
-                        res_card = fincode_register_card(f_cust_id, card_no, expire, cvc, holder)
-                        if "errors" in res_card:
-                             # ★セキュリティ対策: エラー詳細を隠蔽 (クレジットマスター対策)
-                            st.error("カード情報の登録に失敗しました。入力内容（番号・有効期限・CVC）をご確認ください。")
-                        else:
-                            suc, res_sub, req_data, res_raw = fincode_create_subscription(f_cust_id, target_plan_id)
-                            if suc:
-                                update_user_fincode_data(client, uid, subscription_id=res_sub, plan_id=target_plan_id, restriction_type=selected_restriction, valid_until="")
-                                st.balloons()
-                                st.success("サブスクリプションを開始しました！")
-                                time.sleep(2)
-                                st.rerun()
                             else:
-                                st.error("契約処理に失敗しました。")
+                                st.error("顧客登録エラー"); st.stop()
+                        else:
+                            f_cust_id = res["id"]
+                            update_user_fincode_data(client, uid, fincode_id=f_cust_id)
 
-    # ★ アカウント設定（パスワード変更・2段階認証）メニュー
+                    # 2. 一時的に選択プラン情報を保存 (コールバック時に使うため)
+                    update_user_temp_settings(client, uid, selected_restriction)
+
+                    # 3. 決済セッション作成 (3DS対応リンクの発行)
+                    session_res = fincode_create_subscription_session(f_cust_id, target_plan_id, APP_BASE_URL)
+                    
+                    if "errors" in session_res:
+                        st.error(f"エラー: {session_res['errors'][0]['error_message']}")
+                    else:
+                        link_url = session_res["link_url"]
+                        # Streamlitで外部リンクへ飛ばすボタンを表示
+                        st.link_button("👉 ここをクリックして決済を完了させる", link_url, type="primary")
+
     elif menu == "アカウント設定":
         st.subheader("⚙️ アカウント設定")
 
-        # 1. パスワード変更
         with st.expander("🔑 パスワードの変更", expanded=False):
             st.info("セキュリティのため、定期的な変更をおすすめします。")
             with st.form("password_reset_form"):
                 current_pw = st.text_input("現在のパスワード", type="password")
                 new_pw = st.text_input("新しいパスワード", type="password")
                 new_pw_confirm = st.text_input("新しいパスワード（確認）", type="password")
-                
                 submit_pw = st.form_submit_button("パスワードを変更する")
 
             if submit_pw:
@@ -1090,12 +1101,9 @@ def main():
                     else:
                         with st.spinner("更新中..."):
                             suc, msg = update_user_password(client, uid, new_pw)
-                            if suc:
-                                st.success(msg)
-                            else:
-                                st.error(msg)
+                            if suc: st.success(msg)
+                            else: st.error(msg)
         
-        # 2. 2段階認証設定
         st.markdown("---")
         st.subheader("🛡️ 2段階認証 (2FA)")
         
