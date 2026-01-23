@@ -6,6 +6,10 @@ import hashlib
 import json
 import time
 import requests
+import pyotp
+import qrcode
+import io
+from PIL import Image
 from datetime import datetime, timedelta, timezone
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
@@ -20,7 +24,7 @@ TOKEN_PATH = 'gspread_token.json'
 
 SPREADSHEET_ID = "1Y8VEVn95FOp5ELLtBiuUrB9m4S3qDSiX50G6aB88vnk"
 TARGET_SHEET_NAME = "ユーザー設定"
-USERS_SHEET_NAME = "ユーザー管理" # ★このシートにマシン情報を保存します
+USERS_SHEET_NAME = "ユーザー管理"
 CHOICES_SHEET_NAME = "管理"
 
 # ★ マシン設定 (割り当て先サーバー)
@@ -282,29 +286,27 @@ def ensure_users_sheet(client):
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
         
+        # 期待するヘッダー構成 (11列目に secret_key を追加)
+        expected_headers = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine', 'secret_key']
+
         # 1. ワークシートの取得または作成
         try:
             ws = sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
-            # ★ 列数を 10 に設定 (assigned_machine を追加するため)
-            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=10)
-            ws.append_row(['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine'])
+            ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=11)
+            ws.append_row(expected_headers)
             return
 
-        # 2. 列数が足りない場合は拡張する (10列必要)
-        if ws.col_count < 10:
-            ws.resize(cols=10)
+        # 2. 列数が足りない場合は拡張する (11列必要)
+        if ws.col_count < 11:
+            ws.resize(cols=11)
             st.toast("シートの列数を拡張しました (Fix)")
 
         # 3. ヘッダー行の補完
         headers = ws.row_values(1)
-        # ★ 期待するヘッダー構成 (assigned_machine を追加)
-        expected_headers = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine']
-        
-        # ヘッダーが足りない、または空文字の場合に埋める
         needs_update = False
-        if len(headers) < 10:
-            headers += [""] * (10 - len(headers)) # 長さを合わせる
+        if len(headers) < 11:
+            headers += [""] * (11 - len(headers))
             needs_update = True
         
         for i, h in enumerate(expected_headers):
@@ -313,7 +315,7 @@ def ensure_users_sheet(client):
                 needs_update = True
         
         if needs_update:
-            ws.update('A1:J1', [headers])
+            ws.update('A1:K1', [headers])
             st.toast("シートのヘッダー名を修復しました (Fix)")
 
     except Exception as e:
@@ -325,11 +327,11 @@ def get_users_df(_client):
     max_retries = 3
     for i in range(max_retries):
         try:
-            # ★ USERS_SHEET_NAME (ユーザー管理シート) を開く
             sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
             data = sheet.get_all_values()
-            # カラム定義に assigned_machine を含める
-            cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine']
+            
+            # カラム定義 (11列)
+            cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine', 'secret_key']
             
             if len(data) < 2:
                 return pd.DataFrame(columns=cols)
@@ -337,6 +339,7 @@ def get_users_df(_client):
             current_cols = data[0]
             df = pd.DataFrame(data[1:], columns=current_cols).astype(str)
             
+            # 不足カラムを補完
             for c in cols:
                 if c not in df.columns: df[c] = ""
             return df
@@ -355,12 +358,9 @@ def register_user(client, user_id, user_name, password):
     if str(user_id) in users_df['ユーザーID'].values: return False, "ID重複"
     if str(user_name) in users_df['ユーザー名'].values: return False, "名前重複"
         
-    # ★ マシン割り当てロジック (ユーザー管理シートの状況を確認)
-    # 現在の各マシンの利用者数をカウント
+    # マシン割り当てロジック
     count_m1 = len(users_df[users_df['assigned_machine'] == MACHINES[0]])
     count_m2 = len(users_df[users_df['assigned_machine'] == MACHINES[1]])
-    
-    # 人数が少ない方を割り当て (同数の場合は machine_1)
     assigned_machine = MACHINES[0] if count_m1 <= count_m2 else MACHINES[1]
 
     webhook_url = ""
@@ -372,11 +372,10 @@ def register_user(client, user_id, user_name, password):
     except Exception as e: return False, f"Discordエラー: {e}"
 
     try:
-        # ★ USERS_SHEET_NAME (ユーザー管理シート) に保存
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         hashed_pw = hash_password(password)
-        # 最後に assigned_machine (決定したマシン名) を追加して保存
-        sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url, "", "", assigned_machine])
+        # 11列分確保: secret_keyは空文字
+        sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url, "", "", assigned_machine, ""])
         get_users_df.clear()
         return True, "登録完了"
     except Exception as e: return False, f"保存エラー: {e}"
@@ -384,19 +383,26 @@ def register_user(client, user_id, user_name, password):
 def login_user(client, login_input, password):
     users_df = get_users_df(client)
     user_row = users_df[(users_df['ユーザーID'] == str(login_input)) | (users_df['ユーザー名'] == str(login_input))]
-    if user_row.empty: return False, "ユーザーなし", "", ""
-    if user_row.iloc[0]['パスワードハッシュ'] == hash_password(password):
-        return True, "成功", user_row.iloc[0]['ユーザーID'], user_row.iloc[0]['ユーザー名']
-    else: return False, "パスワード違い", "", ""
+    
+    if user_row.empty: 
+        return False, "ユーザーなし", "", "", ""
+    
+    stored_hash = user_row.iloc[0]['パスワードハッシュ']
+    if stored_hash == hash_password(password):
+        user_id = user_row.iloc[0]['ユーザーID']
+        user_name = user_row.iloc[0]['ユーザー名']
+        # シークレットキーを取得（2FA用）
+        secret_key = str(user_row.iloc[0].get('secret_key', '')).strip()
+        return True, "成功", user_id, user_name, secret_key
+    else: 
+        return False, "パスワード違い", "", "", ""
 
 def update_user_password(client, user_id, new_password):
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
         ws = sh.worksheet(USERS_SHEET_NAME)
-        # ユーザーIDで検索
         cell = ws.find(str(user_id))
         if cell:
-            # パスワードハッシュは3列目（C列）
             new_hash = hash_password(new_password)
             ws.update_cell(cell.row, 3, new_hash)
             get_users_df.clear()
@@ -404,6 +410,21 @@ def update_user_password(client, user_id, new_password):
         return False, "ユーザーが見つかりません"
     except Exception as e:
         return False, f"更新エラー: {e}"
+
+def update_user_secret(client, user_id, secret_key):
+    try:
+        sh = client.open_by_key(SPREADSHEET_ID)
+        ws = sh.worksheet(USERS_SHEET_NAME)
+        cell = ws.find(str(user_id))
+        if cell:
+            # secret_keyは11列目（K列）
+            ws.update_cell(cell.row, 11, secret_key)
+            get_users_df.clear()
+            return True
+        return False
+    except Exception as e:
+        st.error(f"Secret保存エラー: {e}")
+        return False
 
 def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=None, plan_id=None, restriction_type=None, valid_until=None):
     try:
@@ -542,23 +563,75 @@ def main():
     client = get_gspread_client()
     if not client: return
 
+    # セッション状態の初期化
     if 'logged_in_user_id' not in st.session_state:
         st.session_state['logged_in_user_id'] = None
         st.session_state['logged_in_user_name'] = None
+    
+    # 2段階認証の一時保存用
+    if 'temp_login_user_id' not in st.session_state:
+        st.session_state['temp_login_user_id'] = None
+        st.session_state['temp_login_user_name'] = None
+        st.session_state['temp_login_secret'] = None
 
+    # ----------------------------------------
+    # ログイン処理フロー
+    # ----------------------------------------
     if st.session_state['logged_in_user_id'] is None:
+        
+        # A. 2段階認証待ちの状態かどうか
+        if st.session_state['temp_login_user_id'] is not None:
+            st.subheader("🔐 2段階認証")
+            st.info("認証アプリに表示されている6桁のコードを入力してください。")
+            
+            otp_code = st.text_input("認証コード", max_chars=6, key="otp_login")
+            
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                if st.button("認証する", type="primary"):
+                    secret = st.session_state['temp_login_secret']
+                    totp = pyotp.TOTP(secret)
+                    if totp.verify(otp_code):
+                        # 認証成功 -> 本ログイン
+                        st.session_state['logged_in_user_id'] = st.session_state['temp_login_user_id']
+                        st.session_state['logged_in_user_name'] = st.session_state['temp_login_user_name']
+                        # 一時データをクリア
+                        st.session_state['temp_login_user_id'] = None
+                        st.session_state['temp_login_user_name'] = None
+                        st.session_state['temp_login_secret'] = None
+                        st.rerun()
+                    else:
+                        st.error("コードが正しくありません")
+            with col2:
+                if st.button("キャンセル"):
+                    st.session_state['temp_login_user_id'] = None
+                    st.session_state['temp_login_user_name'] = None
+                    st.session_state['temp_login_secret'] = None
+                    st.rerun()
+            st.stop()
+
+        # B. 通常のログイン画面
         tab1, tab2 = st.tabs(["🔑 ログイン", "✨ 新規登録"])
         with tab1:
             l_input = st.text_input("ID / 名前", key="li")
             l_pass = st.text_input("パスワード", type="password", key="lp")
             if st.button("ログイン", type="primary"):
                 get_users_df.clear()
-                suc, msg, uid, uname = login_user(client, l_input, l_pass)
+                suc, msg, uid, uname, secret = login_user(client, l_input, l_pass)
                 if suc:
-                    st.session_state['logged_in_user_id'] = uid
-                    st.session_state['logged_in_user_name'] = uname
-                    st.rerun()
-                else: st.error(msg)
+                    if secret and len(secret) > 0:
+                        # 2段階認証が設定されている場合 -> 一時保存して入力画面へ
+                        st.session_state['temp_login_user_id'] = uid
+                        st.session_state['temp_login_user_name'] = uname
+                        st.session_state['temp_login_secret'] = secret
+                        st.rerun()
+                    else:
+                        # 2段階認証なし -> 即ログイン
+                        st.session_state['logged_in_user_id'] = uid
+                        st.session_state['logged_in_user_name'] = uname
+                        st.rerun()
+                else:
+                    st.error(msg)
         with tab2:
             st.info("DiscordユーザーIDを入力してください")
             r_id = st.text_input("Discord ID", key="ri")
@@ -575,6 +648,9 @@ def main():
         show_tokushoho()
         st.stop()
 
+    # ==========================================
+    # ログイン後の処理
+    # ==========================================
     uid = st.session_state['logged_in_user_id']
     uname = st.session_state['logged_in_user_name']
     
@@ -591,6 +667,9 @@ def main():
     channel_url = str(user_row.get('チャンネルURL', ''))
     restriction_type = str(user_row.get('plan', 'all'))
     if not restriction_type: restriction_type = 'all'
+    
+    # 現在の2FA設定状況
+    user_secret_key = str(user_row.get('secret_key', '')).strip()
     
     valid_until_str = str(user_row.get('valid_until', '')).strip()
     is_period_active = False
@@ -925,35 +1004,95 @@ def main():
                             else:
                                 st.error(f"契約エラー: {res_sub}")
 
-    # ★ アカウント設定（パスワード変更）メニュー
+    # ★ アカウント設定（パスワード変更・2段階認証）メニュー
     elif menu == "アカウント設定":
-        st.subheader("🔑 パスワードの変更")
-        st.info("セキュリティのため、定期的な変更をおすすめします。")
+        st.subheader("⚙️ アカウント設定")
 
-        with st.form("password_reset_form"):
-            current_pw = st.text_input("現在のパスワード", type="password")
-            new_pw = st.text_input("新しいパスワード", type="password")
-            new_pw_confirm = st.text_input("新しいパスワード（確認）", type="password")
-            
-            submit_pw = st.form_submit_button("パスワードを変更する")
+        # 1. パスワード変更
+        with st.expander("🔑 パスワードの変更", expanded=False):
+            st.info("セキュリティのため、定期的な変更をおすすめします。")
+            with st.form("password_reset_form"):
+                current_pw = st.text_input("現在のパスワード", type="password")
+                new_pw = st.text_input("新しいパスワード", type="password")
+                new_pw_confirm = st.text_input("新しいパスワード（確認）", type="password")
+                
+                submit_pw = st.form_submit_button("パスワードを変更する")
 
-        if submit_pw:
-            if not current_pw or not new_pw or not new_pw_confirm:
-                st.error("全ての項目を入力してください")
-            elif new_pw != new_pw_confirm:
-                st.error("新しいパスワードが一致しません")
-            else:
-                # 現在のパスワード確認
-                current_hash = user_row.get('パスワードハッシュ', '')
-                if hash_password(current_pw) != current_hash:
-                    st.error("現在のパスワードが間違っています")
+            if submit_pw:
+                if not current_pw or not new_pw or not new_pw_confirm:
+                    st.error("全ての項目を入力してください")
+                elif new_pw != new_pw_confirm:
+                    st.error("新しいパスワードが一致しません")
                 else:
-                    with st.spinner("更新中..."):
-                        suc, msg = update_user_password(client, uid, new_pw)
-                        if suc:
-                            st.success(msg)
+                    current_hash = user_row.get('パスワードハッシュ', '')
+                    if hash_password(current_pw) != current_hash:
+                        st.error("現在のパスワードが間違っています")
+                    else:
+                        with st.spinner("更新中..."):
+                            suc, msg = update_user_password(client, uid, new_pw)
+                            if suc:
+                                st.success(msg)
+                            else:
+                                st.error(msg)
+        
+        # 2. 2段階認証設定
+        st.markdown("---")
+        st.subheader("🛡️ 2段階認証 (2FA)")
+        
+        if user_secret_key:
+            st.success("✅ **2段階認証は現在「有効」です**")
+            st.info("解除するには下のボタンを押してください。")
+            if st.button("2段階認証を解除する", type="primary"):
+                if update_user_secret(client, uid, ""):
+                    st.warning("2段階認証を解除しました。")
+                    time.sleep(1)
+                    st.rerun()
+        else:
+            st.warning("⚠️ **2段階認証は設定されていません**")
+            st.write("設定すると、ログイン時に認証アプリ（Google Authenticatorなど）のコード入力が必要になります。")
+            
+            # 設定用のセッション管理
+            if '2fa_setup_secret' not in st.session_state:
+                st.session_state['2fa_setup_secret'] = pyotp.random_base32()
+            
+            secret = st.session_state['2fa_setup_secret']
+            
+            # QRコード生成
+            uri = pyotp.totp.TOTP(secret).provisioning_uri(name=uname, issuer_name="MyApp")
+            qr_img = qrcode.make(uri)
+            
+            # 画像をStreamlitで表示するためにバイト列に変換
+            img_byte_arr = io.BytesIO()
+            qr_img.save(img_byte_arr, format='PNG')
+            img_byte_arr = img_byte_arr.getvalue()
+
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.image(img_byte_arr, caption="認証アプリでスキャン", width=200)
+            with col2:
+                st.markdown(
+                    f"""
+                    1. Google Authenticator等のアプリで左のQRコードをスキャンしてください。
+                    2. 表示された6桁のコードを以下に入力して「有効にする」を押してください。
+                    
+                    **シークレットキー (手入力用):** `{secret}`
+                    """
+                )
+                verify_code = st.text_input("6桁のコード", max_chars=6, key="otp_setup")
+                
+                if st.button("有効にする"):
+                    totp = pyotp.TOTP(secret)
+                    if totp.verify(verify_code):
+                        if update_user_secret(client, uid, secret):
+                            st.success("🎉 2段階認証が有効になりました！")
+                            # セッションクリア
+                            del st.session_state['2fa_setup_secret']
+                            time.sleep(2)
+                            st.rerun()
                         else:
-                            st.error(msg)
+                            st.error("設定の保存に失敗しました。")
+                    else:
+                        st.error("コードが間違っています。もう一度確認してください。")
 
 if __name__ == "__main__":
     main()
