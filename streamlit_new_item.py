@@ -19,6 +19,7 @@ from gspread.exceptions import APIError
 # ==========================================
 #   設定・定数
 # ==========================================
+# ★ アプリのURL (決済完了後に戻ってくる場所)
 APP_BASE_URL = "https://discord-notify-tool.streamlit.app/"
 
 CREDENTIALS_PATH = 'google_credentials.json'
@@ -196,7 +197,7 @@ def fincode_register_customer(user_id):
     response = requests.post(url, json=data, headers=HEADERS)
     return response.json()
 
-# ★ デバッグ用: データを画面に吐き出す
+# ★ 修正: pay_type を追加しました
 def fincode_create_subscription_session_debug(customer_id, plan_id, return_url):
     url = f"{FINCODE_BASE_URL}/sessions"
     
@@ -207,6 +208,7 @@ def fincode_create_subscription_session_debug(customer_id, plan_id, return_url):
     cancel_url = return_url 
     
     data = {
+        "pay_type": "Card",  # ★ここが重要：決済種別を指定
         "transaction_type": "Subscription",
         "success_url": success_url,
         "cancel_url": cancel_url,
@@ -223,18 +225,21 @@ def fincode_create_subscription_session_debug(customer_id, plan_id, return_url):
         "merchant_name": "NotificationTool"
     }
     
+    # デバッグ表示（確認後、運用時は削除してOKです）
     st.markdown("### 🛠 デバッグ情報: 送信データ")
-    st.json(data) # 送信データを表示
+    st.json(data)
     
     res = requests.post(url, json=data, headers=HEADERS)
     
-    st.markdown(f"### 🛠 デバッグ情報: 受信データ (Status: {res.status_code})")
-    try:
-        st.json(res.json()) # 受信データを表示
-        return res.json()
-    except:
-        st.write(res.text)
-        return {"errors": [{"error_message": "JSON Parse Error"}]}
+    # レスポンス表示
+    if res.status_code != 200:
+        st.markdown(f"### ⚠️ エラー受信 (Status: {res.status_code})")
+        try:
+            st.json(res.json())
+        except:
+            st.write(res.text)
+            
+    return res.json()
 
 def fincode_retrieve_session(session_id):
     url = f"{FINCODE_BASE_URL}/sessions/{session_id}"
@@ -934,7 +939,7 @@ def main():
 
         elif not has_active_subscription and is_period_active:
             st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) までは現在のプランをご利用いただけます。")
-            st.info("再度契約を再開したい場合は、以下からプランを選択してください。")
+            st.info("再度契約を再開したい場合は、以下からプランを選択して新規契約を行ってください。")
             
             plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['base_price']:,}/月")
             selected_plan = PLANS[plan_key]
