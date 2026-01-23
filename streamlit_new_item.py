@@ -20,7 +20,6 @@ from gspread.exceptions import APIError
 #   設定・定数
 # ==========================================
 # ★ アプリのURL (決済完了後に戻ってくる場所)
-# Streamlit CloudのURLを正確に入力してください
 APP_BASE_URL = "https://discord-notify-tool.streamlit.app/"
 
 CREDENTIALS_PATH = 'google_credentials.json'
@@ -202,8 +201,6 @@ def fincode_register_customer(user_id):
 def fincode_create_subscription_session(customer_id, plan_id, return_url):
     url = f"{FINCODE_BASE_URL}/sessions"
     
-    # 成功時と失敗時の戻り先URL
-    # 成功時には ?session_id={id} が付与されて戻ってくる
     success_url = return_url
     cancel_url = return_url 
     
@@ -213,14 +210,14 @@ def fincode_create_subscription_session(customer_id, plan_id, return_url):
         "cancel_url": cancel_url,
         "customer_id": customer_id,
         "plan_id": plan_id,
-        "guide_mail_send_flag": "1", # 決済完了メールを送る
-        "shop_service_name": "通知ツール"
+        "guide_mail_send_flag": "1",
+        "shop_service_name": "通知ツール",
+        "tds_type": "2" # ★ここが重要: 3Dセキュア2.0を強制的に有効化
     }
     
     res = requests.post(url, json=data, headers=HEADERS)
     return res.json()
 
-# ★ セッション情報の取得（決済完了確認用）
 def fincode_retrieve_session(session_id):
     url = f"{FINCODE_BASE_URL}/sessions/{session_id}"
     res = requests.get(url, headers=HEADERS)
@@ -264,8 +261,6 @@ def ensure_users_sheet(client):
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
         
-        # セキュリティ強化: 失敗回数とロック日時を追加 (12, 13列目)
-        # さらに一時的な設定保存用のカラム(14列目)を追加：temp_plan_settings
         expected_headers = [
             'ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 
             'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 
@@ -309,7 +304,6 @@ def get_users_df(_client):
             sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
             data = sheet.get_all_values()
             
-            # カラム定義 (14列)
             cols = [
                 'ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'fincode_customer_id', 
                 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 
@@ -355,7 +349,6 @@ def register_user(client, user_id, user_name, password):
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         hashed_pw = hash_password(password)
-        # 14列確保
         sheet.append_row([str(user_id), str(user_name), hashed_pw, "", "", "", webhook_url, "", "", assigned_machine, "", "0", "", ""])
         get_users_df.clear()
         return True, "登録完了"
@@ -446,14 +439,13 @@ def update_user_secret(client, user_id, secret_key):
         st.error(f"Secret保存エラー: {e}")
         return False
 
-# 決済前の設定（通知カテゴリなど）を一時保存する関数
 def update_user_temp_settings(client, user_id, restriction_type):
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
         ws = sh.worksheet(USERS_SHEET_NAME)
         cell = ws.find(str(user_id))
         if cell:
-            ws.update_cell(cell.row, 14, restriction_type) # 14列目
+            ws.update_cell(cell.row, 14, restriction_type)
             return True
         return False
     except: return False
@@ -607,9 +599,8 @@ def main():
     ensure_users_sheet(client)
 
     # ----------------------------------------
-    # ★ 決済完了後のコールバック処理 (最優先)
+    # ★ 決済完了後のコールバック処理
     # ----------------------------------------
-    # Fincodeから戻ってきたとき、URLに ?session_id=... がついている
     if "session_id" in st.query_params:
         session_id = st.query_params["session_id"]
         
@@ -617,47 +608,27 @@ def main():
             session_data = fincode_retrieve_session(session_id)
             
             if session_data and session_data.get("status") == "COMPLETED":
-                # 決済成功！
-                # セッション情報からユーザーを特定
                 f_cust_id = session_data.get("customer_id")
                 plan_id = session_data.get("plan_id")
-                # FincodeのサブスクリプションIDを取得 (sessionのlistに含まれる場合があるが、ここでは簡易的に処理)
-                # 注: Session APIのレスポンスには作成された subscription_id が含まれない場合があるため、
-                # 本来はWebhook等で受けるのが確実ですが、Streamlitの簡易実装として
-                # 「決済完了＝契約成立」とみなしてDB更新します。
                 
-                # ユーザーDBからFincode IDで逆引きしてユーザーIDを特定
                 users_df = get_users_df(client)
                 target_user = users_df[users_df['fincode_customer_id'] == f_cust_id]
                 
                 if not target_user.empty:
                     uid = target_user.iloc[0]['ユーザーID']
-                    # 一時保存しておいた設定（通知カテゴリなど）を復元
                     saved_restriction = target_user.iloc[0].get('temp_plan_settings', 'all')
                     
-                    # subscription_id は Fincodeの顧客情報から最新のものを取得推奨だが
-                    # ここでは "sub_via_session" 等のマーカーを入れておくか、空にしておく
-                    # ※解約処理のために本来はIDが必要。ここでは簡易的に「有効期限切れ」を消す処理のみ行う
-                    
-                    # 契約情報を更新 (有効期限をクリアして即時有効化)
-                    # subscription_id は後でFincode管理画面等から確認するか、
-                    # 別途Fincode APIで顧客のサブスク一覧を取得して埋めるのがベスト
-                    # 今回はユーザー体験優先で「契約完了」ステータスにする
-                    
-                    # Fincode APIで最新のサブスクIDを取得してみる
                     sub_list_res = requests.get(f"{FINCODE_BASE_URL}/subscriptions", params={"customer_id": f_cust_id}, headers=HEADERS)
                     new_sub_id = ""
                     if sub_list_res.status_code == 200:
                         s_list = sub_list_res.json().get("list", [])
                         if s_list:
-                            new_sub_id = s_list[0]["id"] # 最新のものを採用
+                            new_sub_id = s_list[0]["id"]
 
                     update_user_fincode_data(client, uid, subscription_id=new_sub_id, plan_id=plan_id, restriction_type=saved_restriction, valid_until="")
                     
                     st.balloons()
                     st.success("🎉 お支払いが完了しました！プランが有効になりました。")
-                    
-                    # クエリパラメータを削除してリロード (Streamlitのお作法)
                     time.sleep(3)
                     st.query_params.clear()
                     st.rerun()
@@ -668,13 +639,12 @@ def main():
                 if st.button("トップへ戻る"):
                     st.query_params.clear()
                     st.rerun()
-        st.stop() # コールバック処理中はここで止める
+        st.stop()
 
     # ----------------------------------------
     # 以下、通常のアプリフロー
     # ----------------------------------------
 
-    # セッション状態の初期化
     if 'logged_in_user_id' not in st.session_state:
         st.session_state['logged_in_user_id'] = None
         st.session_state['logged_in_user_name'] = None
@@ -684,7 +654,6 @@ def main():
         st.session_state['temp_login_user_name'] = None
         st.session_state['temp_login_secret'] = None
 
-    # ログイン処理
     if st.session_state['logged_in_user_id'] is None:
         if st.session_state['temp_login_user_id'] is not None:
             st.subheader("🔐 2段階認証")
@@ -744,9 +713,6 @@ def main():
         show_tokushoho()
         st.stop()
 
-    # ==========================================
-    # ログイン後の処理
-    # ==========================================
     uid = st.session_state['logged_in_user_id']
     uname = st.session_state['logged_in_user_name']
     
@@ -881,7 +847,6 @@ def main():
                 r_text = "👜 アパレルのみ" if restriction_type == "apparel" else "📷 アパレル以外のみ"
                 col1.write(f"**選択カテゴリ**: {r_text}")
             
-            # プラン変更は既存のまま (カード変更はFincode管理画面で行ってもらう等の運用が3DSでは一般的だが、ここではプラン変更のみ)
             with st.expander("🔄 プラン内容を変更する"):
                 st.info("プランのアップグレード・ダウングレードや、オプションの追加・解除ができます。")
                 
@@ -953,7 +918,6 @@ def main():
             st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) までは現在のプランをご利用いただけます。")
             st.info("再度契約を再開したい場合は、以下からプランを選択してください。")
             
-            # (以下、再契約のフロー。ここも3DS対応させる)
             plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['base_price']:,}/月")
             selected_plan = PLANS[plan_key]
             
@@ -981,7 +945,6 @@ def main():
                 if not FINCODE_API_KEY: st.error("API設定エラー"); st.stop()
                 
                 with st.spinner("決済ページを準備中..."):
-                    # 1. 顧客IDの確認・作成
                     f_cust_id = str(user_row.get('fincode_customer_id', ''))
                     if f_cust_id in ["", "nan", "None"]:
                         res = fincode_register_customer(uid)
@@ -996,10 +959,8 @@ def main():
                             f_cust_id = res["id"]
                             update_user_fincode_data(client, uid, fincode_id=f_cust_id)
                     
-                    # 2. 一時的に選択プラン情報を保存 (コールバック時に使う)
                     update_user_temp_settings(client, uid, selected_restriction)
                     
-                    # 3. 決済セッション作成
                     session_res = fincode_create_subscription_session(f_cust_id, target_plan_id, APP_BASE_URL)
                     
                     if "errors" in session_res:
@@ -1040,7 +1001,6 @@ def main():
             
             st.subheader(f"ご請求額: ¥{final_price:,} / 月")
             
-            # ★ 3Dセキュア対応: フォーム入力ではなく、リダイレクトボタンに変更
             st.markdown("🔒 **安全な決済のため、Fincodeの決済画面へ移動します**")
             st.caption("※クレジットカード情報はFincodeが安全に管理し、当サイトには保存されません。")
             
@@ -1050,7 +1010,6 @@ def main():
                     st.stop()
 
                 with st.spinner("決済ページを準備中..."):
-                    # 1. 顧客ID確保
                     f_cust_id = str(user_row.get('fincode_customer_id', ''))
                     if f_cust_id in ["", "nan", "None"]:
                         res = fincode_register_customer(uid)
@@ -1065,17 +1024,14 @@ def main():
                             f_cust_id = res["id"]
                             update_user_fincode_data(client, uid, fincode_id=f_cust_id)
 
-                    # 2. 一時的に選択プラン情報を保存 (コールバック時に使うため)
                     update_user_temp_settings(client, uid, selected_restriction)
 
-                    # 3. 決済セッション作成 (3DS対応リンクの発行)
                     session_res = fincode_create_subscription_session(f_cust_id, target_plan_id, APP_BASE_URL)
                     
                     if "errors" in session_res:
                         st.error(f"エラー: {session_res['errors'][0]['error_message']}")
                     else:
                         link_url = session_res["link_url"]
-                        # Streamlitで外部リンクへ飛ばすボタンを表示
                         st.link_button("👉 ここをクリックして決済を完了させる", link_url, type="primary")
 
     elif menu == "アカウント設定":
