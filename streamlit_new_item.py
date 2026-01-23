@@ -20,6 +20,7 @@ from gspread.exceptions import APIError
 #   設定・定数
 # ==========================================
 # ★ アプリのURL (決済完了後に戻ってくる場所)
+# 認証後に戻ってくるために必要です。末尾のスラッシュに注意。
 APP_BASE_URL = "https://discord-notify-tool.streamlit.app/"
 
 CREDENTIALS_PATH = 'google_credentials.json'
@@ -201,6 +202,7 @@ def fincode_register_customer(user_id):
 def fincode_create_subscription_session(customer_id, plan_id, return_url):
     url = f"{FINCODE_BASE_URL}/sessions"
     
+    # 3Dセキュア認証後の戻り先
     success_url = return_url
     cancel_url = return_url 
     
@@ -212,7 +214,8 @@ def fincode_create_subscription_session(customer_id, plan_id, return_url):
         "plan_id": plan_id,
         "guide_mail_send_flag": "1",
         "shop_service_name": "通知ツール",
-        "tds_type": "2" # ★ここが重要: 3Dセキュア2.0を強制的に有効化
+        "tds_type": "2", # 3Dセキュア2.0
+        "return_url": return_url # ★追加: これがないとエラーになります
     }
     
     res = requests.post(url, json=data, headers=HEADERS)
