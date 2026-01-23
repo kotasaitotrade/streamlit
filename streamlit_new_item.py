@@ -20,7 +20,7 @@ from gspread.exceptions import APIError
 #   設定・定数
 # ==========================================
 # ★ アプリのURL (決済完了後に戻ってくる場所)
-# 認証後に戻ってくるために必要です。末尾のスラッシュに注意。
+# 末尾のスラッシュにご注意ください
 APP_BASE_URL = "https://discord-notify-tool.streamlit.app/"
 
 CREDENTIALS_PATH = 'google_credentials.json'
@@ -202,7 +202,11 @@ def fincode_register_customer(user_id):
 def fincode_create_subscription_session(customer_id, plan_id, return_url):
     url = f"{FINCODE_BASE_URL}/sessions"
     
-    # 3Dセキュア認証後の戻り先
+    # オーダーIDを生成（3DS利用時に必須となる場合があるため）
+    # 重複しないようにタイムスタンプを使用
+    current_ts = int(time.time())
+    order_id = f"sub_{customer_id}_{current_ts}"
+
     success_url = return_url
     cancel_url = return_url 
     
@@ -210,12 +214,17 @@ def fincode_create_subscription_session(customer_id, plan_id, return_url):
         "transaction_type": "Subscription",
         "success_url": success_url,
         "cancel_url": cancel_url,
+        "return_url": return_url, # 3DS認証後の戻り先
         "customer_id": customer_id,
         "plan_id": plan_id,
         "guide_mail_send_flag": "1",
         "shop_service_name": "通知ツール",
-        "tds_type": "2", # 3Dセキュア2.0
-        "return_url": return_url # ★追加: これがないとエラーになります
+        "order_id": order_id, # ★追加: 決済ID
+        
+        # ★ 3Dセキュア2.0 必須項目 ★
+        "tds_type": "2",     # 2.0を強制
+        "tds2_type": "3",    # 3: 物品・サービス購入 (必須)
+        "merchant_name": "NotificationTool" # 認証画面に表示される店名 (半角英数)
     }
     
     res = requests.post(url, json=data, headers=HEADERS)
