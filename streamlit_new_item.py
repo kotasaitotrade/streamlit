@@ -19,8 +19,6 @@ from gspread.exceptions import APIError
 # ==========================================
 #   設定・定数
 # ==========================================
-# ★ アプリのURL (決済完了後に戻ってくる場所)
-# 末尾のスラッシュにご注意ください
 APP_BASE_URL = "https://discord-notify-tool.streamlit.app/"
 
 CREDENTIALS_PATH = 'google_credentials.json'
@@ -198,12 +196,10 @@ def fincode_register_customer(user_id):
     response = requests.post(url, json=data, headers=HEADERS)
     return response.json()
 
-# ★ 3Dセキュア対応: 決済セッション作成
-def fincode_create_subscription_session(customer_id, plan_id, return_url):
+# ★ デバッグ用: データを画面に吐き出す
+def fincode_create_subscription_session_debug(customer_id, plan_id, return_url):
     url = f"{FINCODE_BASE_URL}/sessions"
     
-    # オーダーIDを生成（3DS利用時に必須となる場合があるため）
-    # 重複しないようにタイムスタンプを使用
     current_ts = int(time.time())
     order_id = f"sub_{customer_id}_{current_ts}"
 
@@ -214,21 +210,31 @@ def fincode_create_subscription_session(customer_id, plan_id, return_url):
         "transaction_type": "Subscription",
         "success_url": success_url,
         "cancel_url": cancel_url,
-        "return_url": return_url, # 3DS認証後の戻り先
+        "return_url": return_url,
         "customer_id": customer_id,
         "plan_id": plan_id,
         "guide_mail_send_flag": "1",
-        "shop_service_name": "通知ツール",
-        "order_id": order_id, # ★追加: 決済ID
+        "shop_service_name": "NotificationTool",
+        "order_id": order_id, 
         
-        # ★ 3Dセキュア2.0 必須項目 ★
-        "tds_type": "2",     # 2.0を強制
-        "tds2_type": "3",    # 3: 物品・サービス購入 (必須)
-        "merchant_name": "NotificationTool" # 認証画面に表示される店名 (半角英数)
+        # 3Dセキュア項目
+        "tds_type": "2",
+        "tds2_type": "3",
+        "merchant_name": "NotificationTool"
     }
     
+    st.markdown("### 🛠 デバッグ情報: 送信データ")
+    st.json(data) # 送信データを表示
+    
     res = requests.post(url, json=data, headers=HEADERS)
-    return res.json()
+    
+    st.markdown(f"### 🛠 デバッグ情報: 受信データ (Status: {res.status_code})")
+    try:
+        st.json(res.json()) # 受信データを表示
+        return res.json()
+    except:
+        st.write(res.text)
+        return {"errors": [{"error_message": "JSON Parse Error"}]}
 
 def fincode_retrieve_session(session_id):
     url = f"{FINCODE_BASE_URL}/sessions/{session_id}"
@@ -973,9 +979,11 @@ def main():
                     
                     update_user_temp_settings(client, uid, selected_restriction)
                     
-                    session_res = fincode_create_subscription_session(f_cust_id, target_plan_id, APP_BASE_URL)
+                    # デバッグ用関数を使用
+                    session_res = fincode_create_subscription_session_debug(f_cust_id, target_plan_id, APP_BASE_URL)
                     
                     if "errors" in session_res:
+                        # 画面にエラーJSONが出ているはずなので、stopせずに表示だけする
                         st.error(f"エラー: {session_res['errors'][0]['error_message']}")
                     else:
                         link_url = session_res["link_url"]
@@ -1038,7 +1046,8 @@ def main():
 
                     update_user_temp_settings(client, uid, selected_restriction)
 
-                    session_res = fincode_create_subscription_session(f_cust_id, target_plan_id, APP_BASE_URL)
+                    # デバッグ用関数を使用
+                    session_res = fincode_create_subscription_session_debug(f_cust_id, target_plan_id, APP_BASE_URL)
                     
                     if "errors" in session_res:
                         st.error(f"エラー: {session_res['errors'][0]['error_message']}")
