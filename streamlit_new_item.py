@@ -19,6 +19,7 @@ from gspread.exceptions import APIError
 # ==========================================
 #   設定・定数
 # ==========================================
+# ★ アプリのURL (決済完了後に戻ってくる場所)
 APP_BASE_URL = "https://discord-notify-tool.streamlit.app/"
 
 CREDENTIALS_PATH = 'google_credentials.json'
@@ -29,8 +30,10 @@ TARGET_SHEET_NAME = "ユーザー設定"
 USERS_SHEET_NAME = "ユーザー管理"
 CHOICES_SHEET_NAME = "管理"
 
+# ★ マシン設定
 MACHINES = ["machine_1", "machine_2"]
 
+# Secrets読み込み
 try:
     DISCORD_BOT_TOKEN = st.secrets["discord"]["bot_token"]
     DISCORD_GUILD_ID = st.secrets["discord"]["guild_id"]
@@ -38,6 +41,7 @@ except Exception:
     DISCORD_BOT_TOKEN = ""
     DISCORD_GUILD_ID = ""
 
+# ★ プラン設定
 OPTION_PRICE = 2000
 PLANS = {
     "full": {
@@ -87,6 +91,7 @@ def create_json_from_secrets():
 
 create_json_from_secrets()
 
+# Fincode設定読み込み
 try:
     FINCODE_API_KEY = st.secrets["fincode"]["api_key"]
     FINCODE_BASE_URL = st.secrets["fincode"]["base_url"]
@@ -192,16 +197,20 @@ def fincode_register_customer(user_id):
     response = requests.post(url, json=data, headers=HEADERS)
     return response.json()
 
-# ★ 修正: "id" を削除しました。
-# Subscriptionの場合、Order IDは不要（あるいは指定不可）の可能性があるため。
+# ★ 修正: pay_type と id の両方を指定
 def fincode_create_subscription_session_debug(customer_id, plan_id, return_url):
     url = f"{FINCODE_BASE_URL}/sessions"
     
+    # このIDがそのまま「サブスクリプションID」になります
+    current_ts = int(time.time())
+    sub_id = f"sub_{customer_id}_{current_ts}"
+
     success_url = return_url
     cancel_url = return_url 
     
     data = {
-        "pay_type": "Card", 
+        "id": sub_id,        # ★必須 (Subscription IDになる)
+        "pay_type": "Card",  # ★必須 (カード決済を指定)
         "transaction_type": "Subscription",
         "success_url": success_url,
         "cancel_url": cancel_url,
@@ -217,7 +226,6 @@ def fincode_create_subscription_session_debug(customer_id, plan_id, return_url):
         "merchant_name": "NotificationTool"
     }
     
-    # デバッグ表示
     st.markdown("### 🛠 デバッグ情報: 送信データ")
     st.json(data)
     
