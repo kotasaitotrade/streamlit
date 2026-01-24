@@ -19,7 +19,6 @@ from gspread.exceptions import APIError
 # ==========================================
 #   設定・定数
 # ==========================================
-# ★ アプリのURL (決済完了後に戻ってくる場所)
 APP_BASE_URL = "https://discord-notify-tool.streamlit.app/"
 
 CREDENTIALS_PATH = 'google_credentials.json'
@@ -30,10 +29,8 @@ TARGET_SHEET_NAME = "ユーザー設定"
 USERS_SHEET_NAME = "ユーザー管理"
 CHOICES_SHEET_NAME = "管理"
 
-# ★ マシン設定
 MACHINES = ["machine_1", "machine_2"]
 
-# Secrets読み込み
 try:
     DISCORD_BOT_TOKEN = st.secrets["discord"]["bot_token"]
     DISCORD_GUILD_ID = st.secrets["discord"]["guild_id"]
@@ -41,7 +38,6 @@ except Exception:
     DISCORD_BOT_TOKEN = ""
     DISCORD_GUILD_ID = ""
 
-# ★ プラン設定
 OPTION_PRICE = 2000
 PLANS = {
     "full": {
@@ -91,7 +87,6 @@ def create_json_from_secrets():
 
 create_json_from_secrets()
 
-# Fincode設定読み込み
 try:
     FINCODE_API_KEY = st.secrets["fincode"]["api_key"]
     FINCODE_BASE_URL = st.secrets["fincode"]["base_url"]
@@ -197,18 +192,15 @@ def fincode_register_customer(user_id):
     response = requests.post(url, json=data, headers=HEADERS)
     return response.json()
 
-# ★ 修正: key名を order_id -> id に変更
+# ★ 修正: "id" を削除しました。
+# Subscriptionの場合、Order IDは不要（あるいは指定不可）の可能性があるため。
 def fincode_create_subscription_session_debug(customer_id, plan_id, return_url):
     url = f"{FINCODE_BASE_URL}/sessions"
     
-    current_ts = int(time.time())
-    order_id = f"sub_{customer_id}_{current_ts}"
-
     success_url = return_url
     cancel_url = return_url 
     
     data = {
-        "id": order_id, # ★ここを修正しました (order_id -> id)
         "pay_type": "Card", 
         "transaction_type": "Subscription",
         "success_url": success_url,
@@ -225,9 +217,9 @@ def fincode_create_subscription_session_debug(customer_id, plan_id, return_url):
         "merchant_name": "NotificationTool"
     }
     
-    # デバッグ表示（確認用）
-    # st.markdown("### 🛠 デバッグ情報: 送信データ")
-    # st.json(data)
+    # デバッグ表示
+    st.markdown("### 🛠 デバッグ情報: 送信データ")
+    st.json(data)
     
     res = requests.post(url, json=data, headers=HEADERS)
     
@@ -620,9 +612,6 @@ def main():
 
     ensure_users_sheet(client)
 
-    # ----------------------------------------
-    # ★ 決済完了後のコールバック処理
-    # ----------------------------------------
     if "session_id" in st.query_params:
         session_id = st.query_params["session_id"]
         
@@ -662,10 +651,6 @@ def main():
                     st.query_params.clear()
                     st.rerun()
         st.stop()
-
-    # ----------------------------------------
-    # 以下、通常のアプリフロー
-    # ----------------------------------------
 
     if 'logged_in_user_id' not in st.session_state:
         st.session_state['logged_in_user_id'] = None
@@ -938,7 +923,7 @@ def main():
 
         elif not has_active_subscription and is_period_active:
             st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) までは現在のプランをご利用いただけます。")
-            st.info("再度契約を再開したい場合は、以下からプランを選択してください。")
+            st.info("再度契約を再開したい場合は、以下からプランを選択して新規契約を行ってください。")
             
             plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['base_price']:,}/月")
             selected_plan = PLANS[plan_key]
@@ -987,7 +972,6 @@ def main():
                     session_res = fincode_create_subscription_session_debug(f_cust_id, target_plan_id, APP_BASE_URL)
                     
                     if "errors" in session_res:
-                        # 画面にエラーJSONが出ているはずなので、stopせずに表示だけする
                         st.error(f"エラー: {session_res['errors'][0]['error_message']}")
                     else:
                         link_url = session_res["link_url"]
