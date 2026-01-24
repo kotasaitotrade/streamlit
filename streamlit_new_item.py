@@ -197,7 +197,7 @@ def fincode_register_customer(user_id):
     response = requests.post(url, json=data, headers=HEADERS)
     return response.json()
 
-# ★ 修正: pay_type を追加しました
+# ★ 修正: key名を order_id -> id に変更
 def fincode_create_subscription_session_debug(customer_id, plan_id, return_url):
     url = f"{FINCODE_BASE_URL}/sessions"
     
@@ -208,7 +208,8 @@ def fincode_create_subscription_session_debug(customer_id, plan_id, return_url):
     cancel_url = return_url 
     
     data = {
-        "pay_type": "Card",  # ★ここが重要：決済種別を指定
+        "id": order_id, # ★ここを修正しました (order_id -> id)
+        "pay_type": "Card", 
         "transaction_type": "Subscription",
         "success_url": success_url,
         "cancel_url": cancel_url,
@@ -217,7 +218,6 @@ def fincode_create_subscription_session_debug(customer_id, plan_id, return_url):
         "plan_id": plan_id,
         "guide_mail_send_flag": "1",
         "shop_service_name": "NotificationTool",
-        "order_id": order_id, 
         
         # 3Dセキュア項目
         "tds_type": "2",
@@ -225,13 +225,12 @@ def fincode_create_subscription_session_debug(customer_id, plan_id, return_url):
         "merchant_name": "NotificationTool"
     }
     
-    # デバッグ表示（確認後、運用時は削除してOKです）
-    st.markdown("### 🛠 デバッグ情報: 送信データ")
-    st.json(data)
+    # デバッグ表示（確認用）
+    # st.markdown("### 🛠 デバッグ情報: 送信データ")
+    # st.json(data)
     
     res = requests.post(url, json=data, headers=HEADERS)
     
-    # レスポンス表示
     if res.status_code != 200:
         st.markdown(f"### ⚠️ エラー受信 (Status: {res.status_code})")
         try:
@@ -939,7 +938,7 @@ def main():
 
         elif not has_active_subscription and is_period_active:
             st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) までは現在のプランをご利用いただけます。")
-            st.info("再度契約を再開したい場合は、以下からプランを選択して新規契約を行ってください。")
+            st.info("再度契約を再開したい場合は、以下からプランを選択してください。")
             
             plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['base_price']:,}/月")
             selected_plan = PLANS[plan_key]
