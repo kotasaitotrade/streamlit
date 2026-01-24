@@ -189,7 +189,7 @@ def create_discord_channel_and_webhook(user_discord_id, user_name):
     return True, webhook_data["url"]
 
 # ==========================================
-#   Fincode API (3Dセキュア対応版)
+#   Fincode API (3Dセキュア対応・サブスクフロー)
 # ==========================================
 def fincode_register_customer(user_id):
     url = f"{FINCODE_BASE_URL}/customers"
@@ -197,36 +197,21 @@ def fincode_register_customer(user_id):
     response = requests.post(url, json=data, headers=HEADERS)
     return response.json()
 
-# ★ 修正: pay_type と id の両方を指定
-def fincode_create_subscription_session_debug(customer_id, plan_id, return_url):
-    url = f"{FINCODE_BASE_URL}/sessions"
-    
-    # このIDがそのまま「サブスクリプションID」になります
-    current_ts = int(time.time())
-    sub_id = f"sub_{customer_id}_{current_ts}"
-
-    success_url = return_url
-    cancel_url = return_url 
+# ★ 修正: カード登録用のセッションを作成するAPI (POST /v1/card_sessions)
+# これが「カード登録＋3Dセキュア」を行う正しいエンドポイントです
+def fincode_create_card_registration_session(customer_id, return_url):
+    url = f"{FINCODE_BASE_URL}/card_sessions"
     
     data = {
-        "id": sub_id,        # ★必須 (Subscription IDになる)
-        "pay_type": "Card",  # ★必須 (カード決済を指定)
-        "transaction_type": "Subscription",
-        "success_url": success_url,
-        "cancel_url": cancel_url,
-        "return_url": return_url,
-        "customer_id": customer_id,
-        "plan_id": plan_id,
-        "guide_mail_send_flag": "1",
-        "shop_service_name": "NotificationTool",
-        
-        # 3Dセキュア項目
-        "tds_type": "2",
-        "tds2_type": "3",
-        "merchant_name": "NotificationTool"
+        "customer_id": customer_id, # どの顧客にカードを紐づけるか
+        "success_url": return_url,  # 成功時の戻り先
+        "cancel_url": return_url,   # キャンセル時の戻り先
+        "site_name": "NotificationTool",
+        "guide_mail_send_flag": "0"
     }
     
-    st.markdown("### 🛠 デバッグ情報: 送信データ")
+    # デバッグ表示
+    st.markdown("### 🛠 デバッグ情報: 送信データ (カード登録セッション)")
     st.json(data)
     
     res = requests.post(url, json=data, headers=HEADERS)
@@ -240,12 +225,29 @@ def fincode_create_subscription_session_debug(customer_id, plan_id, return_url):
             
     return res.json()
 
-def fincode_retrieve_session(session_id):
-    url = f"{FINCODE_BASE_URL}/sessions/{session_id}"
+# 顧客のカード情報を取得（登録確認用）
+def fincode_get_customer_cards(customer_id):
+    url = f"{FINCODE_BASE_URL}/customers/{customer_id}/cards"
     res = requests.get(url, headers=HEADERS)
     if res.status_code == 200:
-        return res.json()
-    return None
+        return res.json().get("list", [])
+    return []
+
+# サブスクリプション作成 (カード登録後に実行)
+def fincode_create_subscription(customer_id, plan_id):
+    url = f"{FINCODE_BASE_URL}/subscriptions"
+    JST = timezone(timedelta(hours=9))
+    today_str = datetime.now(JST).strftime('%Y/%m/%d')
+    
+    data = {
+        "pay_type": "Card",
+        "plan_id": plan_id,
+        "customer_id": customer_id,
+        "start_date": today_str
+    }
+    
+    res = requests.post(url, json=data, headers=HEADERS)
+    return res.json()
 
 def fincode_update_subscription(subscription_id, plan_id):
     url = f"{FINCODE_BASE_URL}/subscriptions/{subscription_id}"
@@ -461,13 +463,15 @@ def update_user_secret(client, user_id, secret_key):
         st.error(f"Secret保存エラー: {e}")
         return False
 
-def update_user_temp_settings(client, user_id, restriction_type):
+def update_user_temp_settings(client, user_id, restriction_type, plan_id):
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
         ws = sh.worksheet(USERS_SHEET_NAME)
         cell = ws.find(str(user_id))
         if cell:
-            ws.update_cell(cell.row, 14, restriction_type)
+            # 14列目に「通知設定(apparelなど)」と「プランID」をカンマ区切りで保存する簡易実装
+            val = f"{restriction_type},{plan_id}"
+            ws.update_cell(cell.row, 14, val)
             return True
         return False
     except: return False
@@ -477,9 +481,13 @@ def get_user_temp_settings(client, user_id):
         users_df = get_users_df(client)
         row = users_df[users_df['ユーザーID'] == str(user_id)]
         if not row.empty:
-            return str(row.iloc[0].get('temp_plan_settings', 'all'))
-        return 'all'
-    except: return 'all'
+            val = str(row.iloc[0].get('temp_plan_settings', 'all,plan_9000'))
+            parts = val.split(',')
+            if len(parts) >= 2:
+                return parts[0], parts[1]
+            return 'all', 'plan_9000'
+        return 'all', 'plan_9000'
+    except: return 'all', 'plan_9000'
 
 def update_user_fincode_data(client, user_id, fincode_id=None, subscription_id=None, plan_id=None, restriction_type=None, valid_until=None):
     try:
@@ -620,45 +628,57 @@ def main():
 
     ensure_users_sheet(client)
 
-    if "session_id" in st.query_params:
-        session_id = st.query_params["session_id"]
+    # ----------------------------------------
+    # ★ 決済完了後のコールバック処理
+    # ----------------------------------------
+    # Fincodeのカード登録画面から戻ってきた際の処理
+    # URLパラメータに `action=card_reg_complete` と `uid=...` があると想定
+    if "action" in st.query_params and st.query_params["action"] == "card_reg_complete":
+        target_uid = st.query_params.get("uid", "")
         
-        with st.spinner("決済情報を確認中..."):
-            session_data = fincode_retrieve_session(session_id)
+        with st.spinner("お支払いを処理しています..."):
+            # 1. ユーザー情報を取得
+            users_df = get_users_df(client)
+            target_user = users_df[users_df['ユーザーID'] == str(target_uid)]
             
-            if session_data and session_data.get("status") == "COMPLETED":
-                f_cust_id = session_data.get("customer_id")
-                plan_id = session_data.get("plan_id")
+            if not target_user.empty:
+                f_cust_id = str(target_user.iloc[0]['fincode_customer_id'])
                 
-                users_df = get_users_df(client)
-                target_user = users_df[users_df['fincode_customer_id'] == f_cust_id]
-                
-                if not target_user.empty:
-                    uid = target_user.iloc[0]['ユーザーID']
-                    saved_restriction = target_user.iloc[0].get('temp_plan_settings', 'all')
+                # 2. カードが本当に登録されたか確認
+                cards = fincode_get_customer_cards(f_cust_id)
+                if cards:
+                    # 3. 登録カードを使ってサブスクリプションを作成
+                    # 一時保存しておいた設定（プランIDなど）を復元
+                    saved_restriction, saved_plan_id = get_user_temp_settings(client, target_uid)
                     
-                    sub_list_res = requests.get(f"{FINCODE_BASE_URL}/subscriptions", params={"customer_id": f_cust_id}, headers=HEADERS)
-                    new_sub_id = ""
-                    if sub_list_res.status_code == 200:
-                        s_list = sub_list_res.json().get("list", [])
-                        if s_list:
-                            new_sub_id = s_list[0]["id"]
-
-                    update_user_fincode_data(client, uid, subscription_id=new_sub_id, plan_id=plan_id, restriction_type=saved_restriction, valid_until="")
+                    sub_res = fincode_create_subscription(f_cust_id, saved_plan_id)
                     
-                    st.balloons()
-                    st.success("🎉 お支払いが完了しました！プランが有効になりました。")
-                    time.sleep(3)
-                    st.query_params.clear()
-                    st.rerun()
+                    if "errors" in sub_res:
+                        st.error(f"決済処理エラー: {sub_res['errors'][0]['error_message']}")
+                    else:
+                        new_sub_id = sub_res["id"]
+                        update_user_fincode_data(client, target_uid, subscription_id=new_sub_id, plan_id=saved_plan_id, restriction_type=saved_restriction, valid_until="")
+                        
+                        st.balloons()
+                        st.success("🎉 お支払いが完了しました！プランが有効になりました。")
+                        time.sleep(3)
+                        st.query_params.clear()
+                        # ログインさせるためにセッション更新
+                        st.session_state['logged_in_user_id'] = target_uid
+                        st.session_state['logged_in_user_name'] = target_user.iloc[0]['ユーザー名']
+                        st.rerun()
                 else:
-                    st.error("ユーザー情報の照合に失敗しました。管理者にお問い合わせください。")
+                    st.error("カード情報の登録が確認できませんでした。")
+                    if st.button("トップへ戻る"):
+                        st.query_params.clear()
+                        st.rerun()
             else:
-                st.error("決済が完了していません。もう一度お試しください。")
-                if st.button("トップへ戻る"):
-                    st.query_params.clear()
-                    st.rerun()
+                st.error("ユーザー情報の照合に失敗しました。")
         st.stop()
+
+    # ----------------------------------------
+    # 以下、通常のアプリフロー
+    # ----------------------------------------
 
     if 'logged_in_user_id' not in st.session_state:
         st.session_state['logged_in_user_id'] = None
@@ -931,7 +951,7 @@ def main():
 
         elif not has_active_subscription and is_period_active:
             st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) までは現在のプランをご利用いただけます。")
-            st.info("再度契約を再開したい場合は、以下からプランを選択して新規契約を行ってください。")
+            st.info("再度契約を再開したい場合は、以下からプランを選択してください。")
             
             plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['base_price']:,}/月")
             selected_plan = PLANS[plan_key]
@@ -960,6 +980,7 @@ def main():
                 if not FINCODE_API_KEY: st.error("API設定エラー"); st.stop()
                 
                 with st.spinner("決済ページを準備中..."):
+                    # 1. 顧客登録 (なければ)
                     f_cust_id = str(user_row.get('fincode_customer_id', ''))
                     if f_cust_id in ["", "nan", "None"]:
                         res = fincode_register_customer(uid)
@@ -974,16 +995,19 @@ def main():
                             f_cust_id = res["id"]
                             update_user_fincode_data(client, uid, fincode_id=f_cust_id)
                     
-                    update_user_temp_settings(client, uid, selected_restriction)
+                    # 2. 設定の一時保存
+                    update_user_temp_settings(client, uid, selected_restriction, target_plan_id)
                     
-                    # デバッグ用関数を使用
-                    session_res = fincode_create_subscription_session_debug(f_cust_id, target_plan_id, APP_BASE_URL)
+                    # 3. カード登録セッション作成 (これが正しいフロー)
+                    # 戻り先にカスタムパラメータを含めて、ユーザー特定とアクション指示を行う
+                    return_with_param = f"{APP_BASE_URL}?action=card_reg_complete&uid={uid}"
+                    session_res = fincode_create_card_registration_session(f_cust_id, return_with_param)
                     
                     if "errors" in session_res:
                         st.error(f"エラー: {session_res['errors'][0]['error_message']}")
                     else:
                         link_url = session_res["link_url"]
-                        st.link_button("👉 ここをクリックして決済を完了させる", link_url, type="primary")
+                        st.link_button("👉 ここをクリックしてカード登録を完了させる", link_url, type="primary")
 
         else:
             st.info("利用を開始するには、以下のプランから選択してください。")
@@ -1026,6 +1050,7 @@ def main():
                     st.stop()
 
                 with st.spinner("決済ページを準備中..."):
+                    # 1. 顧客登録
                     f_cust_id = str(user_row.get('fincode_customer_id', ''))
                     if f_cust_id in ["", "nan", "None"]:
                         res = fincode_register_customer(uid)
@@ -1040,16 +1065,18 @@ def main():
                             f_cust_id = res["id"]
                             update_user_fincode_data(client, uid, fincode_id=f_cust_id)
 
-                    update_user_temp_settings(client, uid, selected_restriction)
+                    # 2. 設定一時保存
+                    update_user_temp_settings(client, uid, selected_restriction, target_plan_id)
 
-                    # デバッグ用関数を使用
-                    session_res = fincode_create_subscription_session_debug(f_cust_id, target_plan_id, APP_BASE_URL)
+                    # 3. カード登録セッション作成
+                    return_with_param = f"{APP_BASE_URL}?action=card_reg_complete&uid={uid}"
+                    session_res = fincode_create_card_registration_session(f_cust_id, return_with_param)
                     
                     if "errors" in session_res:
                         st.error(f"エラー: {session_res['errors'][0]['error_message']}")
                     else:
                         link_url = session_res["link_url"]
-                        st.link_button("👉 ここをクリックして決済を完了させる", link_url, type="primary")
+                        st.link_button("👉 ここをクリックしてカード登録を完了させる", link_url, type="primary")
 
     elif menu == "アカウント設定":
         st.subheader("⚙️ アカウント設定")
