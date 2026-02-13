@@ -54,7 +54,7 @@ PLANS = {
         "type": "all",
         "base_price": 9000,
         "base_id": "price_1T0D0LRp7tXAl48PFa7JBztW",           # フルプラン単体 (9000円)
-        "opt_id": "price_1T0D1yRp7tXAl48P0ep6L76Y"            # フルプラン+OP (11000円) ★セット済み！
+        "opt_id": "price_1T0D1yRp7tXAl48P0ep6L76Y"            # フルプラン+OP (11000円)
     },
     "light": {
         "name": "ライトプラン (片方のみ)",
