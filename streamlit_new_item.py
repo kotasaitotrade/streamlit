@@ -62,7 +62,7 @@ SCOPES = [
 ]
 
 # ==========================================
-#   Secrets & 認証処理 (★修正箇所：ブロックを分けて詳細表示)
+#   Secrets & 認証処理
 # ==========================================
 # 1. Discord設定
 try:
@@ -122,9 +122,10 @@ def get_gspread_client():
         return None
     return None
 
+# ★審査突破用修正：特商法を最初から開いた状態（expanded=True）にする
 def show_tokushoho():
     st.markdown("---")
-    with st.expander("⚖️ 特定商取引法に基づく表記"):
+    with st.expander("⚖️ 特定商取引法に基づく表記", expanded=True):
         st.markdown("""
         | 項目 | 内容 |
         | :--- | :--- |
@@ -133,7 +134,7 @@ def show_tokushoho():
         | **所在地** | 〒156-0055 東京都世田谷区船橋2-8-1 |
         | **電話番号** | 080-3423-1798 |
         | **メールアドレス** | koutaiwi@gmail.com |
-        | **販売価格** | プラン契約画面に記載 |
+        | **販売価格** | 本ページ上部の「料金プラン」に記載 |
         | **支払方法** | クレジットカード決済 (Stripe) |
         """)
 
@@ -141,7 +142,6 @@ def show_tokushoho():
 #   Discord API連携
 # ==========================================
 def create_discord_channel_and_webhook(user_discord_id, user_name):
-    # ★修正箇所: 何が不足しているかを詳細に返す
     if not DISCORD_BOT_TOKEN or not DISCORD_GUILD_ID:
         token_status = "OK" if DISCORD_BOT_TOKEN else "NG(空)"
         guild_status = "OK" if DISCORD_GUILD_ID else "NG(空)"
@@ -598,7 +598,6 @@ def save_merged_data(client, full_df, edited_display_df, user_id, restriction_ty
 #   メイン
 # ==========================================
 def main():
-    st.title("🔔 通知設定＆サブスク管理")
     client = get_gspread_client()
     if not client: return
 
@@ -694,6 +693,25 @@ def main():
                     st.rerun()
             st.stop()
 
+        # =========================================================
+        # ★ 審査突破用追加: 審査員向けにサービス内容を表示
+        # =========================================================
+        st.markdown("## 📊 ツウチマネージャー (市場リサーチツール)")
+        st.markdown("""
+        **【サービス概要】**
+        リユース市場における商品価格や在庫状況を横断的に分析・可視化するSaaS型リサーチツールです。
+        Web上の公開情報をシステムが整理して提供することで、市場調査や適正価格の把握にかかる時間を短縮し、業務効率化を支援します。
+        
+        **【料金プラン】**
+        当サービスは月額制のサブスクリプションです。
+        * **ライトプラン (月額 5,000円)** : アパレルまたはそれ以外の片方カテゴリのみ利用可能
+        * **フルプラン (月額 9,000円)** : 全てのカテゴリが利用可能
+        * **キーワード通知オプション (+月額 2,000円)** : 特定のキーワードによる絞り込み機能を追加
+        """)
+        st.markdown("---")
+        st.info("👇 既存ユーザーはログイン、新規の方はご登録をお願いいたします。")
+        # =========================================================
+
         tab1, tab2 = st.tabs(["🔑 ログイン", "✨ 新規登録"])
         with tab1:
             l_input = st.text_input("ID / 名前", key="li", max_chars=50)
@@ -725,6 +743,8 @@ def main():
                         st.success(msg)
                         st.balloons()
                     else: st.error(msg)
+        
+        # 特商法を表示 (最初から開いた状態になります)
         show_tokushoho()
         st.stop()
 
@@ -784,7 +804,7 @@ def main():
             st.stop()
         
         if not has_active_subscription and is_period_active:
-            st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) までは機能をご利用いただけます。")
+            st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) ま走到は機能をご利用いただけます。")
 
         allowed_opts = get_allowed_options(client, restriction_type)
         
