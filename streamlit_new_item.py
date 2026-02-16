@@ -64,21 +64,19 @@ SCOPES = [
 # ==========================================
 #   Secrets & 認証処理
 # ==========================================
-# 1. Discord設定
 try:
     DISCORD_BOT_TOKEN = st.secrets["discord"]["bot_token"]
     DISCORD_GUILD_ID = st.secrets["discord"]["guild_id"]
 except Exception as e:
     DISCORD_BOT_TOKEN = ""
     DISCORD_GUILD_ID = ""
-    st.error(f"⚠️ 【デバッグ情報】DiscordのSecrets読み込みエラー: `[discord]`セクションが見つからないか、値が間違っています。（詳細: {e}）")
+    st.error(f"⚠️ Discord Secrets読み込みエラー: {e}")
 
-# 2. Stripe設定
 try:
     stripe.api_key = st.secrets["stripe"]["api_key"]
 except Exception as e:
     stripe.api_key = ""
-    st.error(f"⚠️ 【デバッグ情報】StripeのSecrets読み込みエラー: `[stripe]`セクションが見つからないか、値が間違っています。（詳細: {e}）")
+    st.error(f"⚠️ Stripe Secrets読み込みエラー: {e}")
 
 def create_json_from_secrets():
     def recursive_dict(d):
@@ -95,7 +93,7 @@ def create_json_from_secrets():
                 token_dict = recursive_dict(st.secrets["gspread_token"])
                 f.write(json.dumps(token_dict))
     except Exception as e:
-        st.error(f"⚠️ 【デバッグ情報】Google Secrets読み込みエラー: {e}")
+        st.error(f"⚠️ Google Secrets読み込みエラー: {e}")
 
 create_json_from_secrets()
 
@@ -142,9 +140,7 @@ def show_tokushoho():
 # ==========================================
 def create_discord_channel_and_webhook(user_discord_id, user_name):
     if not DISCORD_BOT_TOKEN or not DISCORD_GUILD_ID:
-        token_status = "OK" if DISCORD_BOT_TOKEN else "NG(空)"
-        guild_status = "OK" if DISCORD_GUILD_ID else "NG(空)"
-        return False, f"サーバー設定不足 (Token: {token_status}, GuildID: {guild_status})"
+        return False, "サーバー設定不足"
 
     headers = {
         "Authorization": f"Bot {DISCORD_BOT_TOKEN}",
@@ -156,22 +152,13 @@ def create_discord_channel_and_webhook(user_discord_id, user_name):
         "name": f"通知-{user_name}",
         "type": 0,
         "permission_overwrites": [
-            {
-                "id": DISCORD_GUILD_ID,
-                "type": 0,
-                "deny": "1024"
-            },
-            {
-                "id": user_discord_id,
-                "type": 1,
-                "allow": "1024"
-            }
+            {"id": DISCORD_GUILD_ID, "type": 0, "deny": "1024"},
+            {"id": user_discord_id, "type": 1, "allow": "1024"}
         ]
     }
     
     res = requests.post(url_create, json=payload, headers=headers)
-    if res.status_code not in [200, 201]:
-        return False, f"チャンネル作成失敗: {res.text}"
+    if res.status_code not in [200, 201]: return False, f"チャンネル作成失敗: {res.text}"
     
     channel_data = res.json()
     channel_id = channel_data["id"]
@@ -179,8 +166,7 @@ def create_discord_channel_and_webhook(user_discord_id, user_name):
     url_webhook = f"https://discord.com/api/v10/channels/{channel_id}/webhooks"
     webhook_payload = {"name": "新着通知Bot"}
     res_wh = requests.post(url_webhook, json=webhook_payload, headers=headers)
-    if res_wh.status_code not in [200, 201]:
-        return False, f"Webhook作成失敗: {res_wh.text}"
+    if res_wh.status_code not in [200, 201]: return False, f"Webhook作成失敗: {res_wh.text}"
         
     webhook_data = res_wh.json()
     return True, webhook_data["url"]
@@ -188,17 +174,11 @@ def create_discord_channel_and_webhook(user_discord_id, user_name):
 # ==========================================
 #   Stripe API Functions
 # ==========================================
-
 def create_stripe_checkout_session(user_id, price_id):
     try:
         checkout_session = stripe.checkout.Session.create(
             payment_method_types=['card'],
-            line_items=[
-                {
-                    'price': price_id,
-                    'quantity': 1,
-                },
-            ],
+            line_items=[{'price': price_id, 'quantity': 1}],
             mode='subscription',
             success_url=APP_BASE_URL + '?session_id={CHECKOUT_SESSION_ID}',
             cancel_url=APP_BASE_URL,
@@ -210,41 +190,27 @@ def create_stripe_checkout_session(user_id, price_id):
         return False, str(e)
 
 def get_stripe_session_details(session_id):
-    try:
-        session = stripe.checkout.Session.retrieve(session_id)
-        return session
+    try: return stripe.checkout.Session.retrieve(session_id)
     except Exception as e:
         st.error(f"Stripe Session取得エラー: {e}")
         return None
 
 def cancel_stripe_subscription_at_period_end(subscription_id):
     try:
-        stripe.Subscription.modify(
-            subscription_id,
-            cancel_at_period_end=True
-        )
+        stripe.Subscription.modify(subscription_id, cancel_at_period_end=True)
         sub = stripe.Subscription.retrieve(subscription_id)
         current_period_end = sub['current_period_end']
         end_date = datetime.fromtimestamp(current_period_end)
         return True, end_date.strftime('%Y/%m/%d')
-    except Exception as e:
-        return False, str(e)
+    except Exception as e: return False, str(e)
 
 def change_stripe_subscription_plan(subscription_id, new_price_id):
     try:
         sub = stripe.Subscription.retrieve(subscription_id)
         item_id = sub['items']['data'][0].id
-        
-        stripe.Subscription.modify(
-            subscription_id,
-            items=[{
-                'id': item_id,
-                'price': new_price_id,
-            }],
-        )
+        stripe.Subscription.modify(subscription_id, items=[{'id': item_id, 'price': new_price_id}])
         return True, "プランを変更しました"
-    except Exception as e:
-        return False, str(e)
+    except Exception as e: return False, str(e)
 
 # ==========================================
 #   ユーザー管理・DB操作
@@ -255,23 +221,18 @@ def hash_password(password):
 def ensure_users_sheet(client):
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
-        
         expected_headers = [
             'ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'stripe_customer_id', 
             'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 
             'assigned_machine', 'secret_key', 'failed_count', 'locked_until', 'temp_plan_settings'
         ]
-
-        try:
-            ws = sh.worksheet(USERS_SHEET_NAME)
+        try: ws = sh.worksheet(USERS_SHEET_NAME)
         except gspread.exceptions.WorksheetNotFound:
             ws = sh.add_worksheet(title=USERS_SHEET_NAME, rows=100, cols=14)
             ws.append_row(expected_headers)
             return
 
-        if ws.col_count < 14:
-            ws.resize(cols=14)
-
+        if ws.col_count < 14: ws.resize(cols=14)
         headers = ws.row_values(1)
         needs_update = False
         if len(headers) < 14:
@@ -280,16 +241,11 @@ def ensure_users_sheet(client):
         
         for i, h in enumerate(expected_headers):
             if i < len(headers):
-                if i == 3 and "fincode" in headers[i]:
-                    headers[i] = h
-                    needs_update = True
-                elif headers[i] == "":
+                if headers[i] == "" or (i == 3 and "fincode" in headers[i]):
                     headers[i] = h
                     needs_update = True
         
-        if needs_update:
-            ws.update('A1:N1', [headers])
-
+        if needs_update: ws.update('A1:N1', [headers])
     except Exception as e:
         st.error(f"ユーザーDB初期化エラー: {e}")
 
@@ -300,22 +256,14 @@ def get_users_df(_client):
         try:
             sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
             data = sheet.get_all_values()
-            
             cols = [
                 'ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'stripe_customer_id', 
                 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 
                 'assigned_machine', 'secret_key', 'failed_count', 'locked_until', 'temp_plan_settings'
             ]
-            
-            if len(data) < 2:
-                return pd.DataFrame(columns=cols)
-            
-            current_cols = data[0]
-            df = pd.DataFrame(data[1:], columns=current_cols).astype(str)
-            
-            if 'fincode_customer_id' in df.columns:
-                df = df.rename(columns={'fincode_customer_id': 'stripe_customer_id'})
-
+            if len(data) < 2: return pd.DataFrame(columns=cols)
+            df = pd.DataFrame(data[1:], columns=data[0]).astype(str)
+            if 'fincode_customer_id' in df.columns: df = df.rename(columns={'fincode_customer_id': 'stripe_customer_id'})
             for c in cols:
                 if c not in df.columns: df[c] = ""
             return df
@@ -324,13 +272,11 @@ def get_users_df(_client):
                 time.sleep(2 ** i)
                 continue
             return pd.DataFrame()
-        except Exception:
-            return pd.DataFrame()
+        except Exception: return pd.DataFrame()
 
 def register_user(client, user_id, user_name, password):
     get_users_df.clear()
     users_df = get_users_df(client)
-    
     if str(user_id) in users_df['ユーザーID'].values: return False, "ID重複"
     if str(user_name) in users_df['ユーザー名'].values: return False, "名前重複"
         
@@ -358,14 +304,11 @@ def login_user(client, login_input, password):
     try:
         sh = client.open_by_key(SPREADSHEET_ID)
         ws = sh.worksheet(USERS_SHEET_NAME)
-        
         cell = ws.find(str(login_input))
-        if not cell:
-            return False, "ユーザーIDまたはパスワードが間違っています", "", "", ""
+        if not cell: return False, "ユーザーIDまたはパスワードが間違っています", "", "", ""
         
         row_values = ws.row_values(cell.row)
-        if len(row_values) < 14:
-            row_values += [""] * (14 - len(row_values))
+        if len(row_values) < 14: row_values += [""] * (14 - len(row_values))
             
         user_id = row_values[0]
         user_name = row_values[1]
@@ -382,9 +325,8 @@ def login_user(client, login_input, password):
                 lock_time = datetime.strptime(locked_until_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=JST)
                 if now < lock_time:
                     remain = int((lock_time - now).total_seconds() / 60)
-                    return False, f"アカウントはロックされています。あと約{remain}分後に再度お試しください。", "", "", ""
-            except:
-                pass
+                    return False, f"アカウントはロックされています。約{remain}分後にお試しください。", "", "", ""
+            except: pass
         
         if stored_hash == hash_password(password):
             if failed_count_str != "0" or locked_until_str != "":
@@ -392,24 +334,15 @@ def login_user(client, login_input, password):
                 ws.update_cell(cell.row, 13, "")
             return True, "成功", user_id, user_name, secret_key
         else:
-            try:
-                current_fail = int(failed_count_str) if failed_count_str.isdigit() else 0
-            except:
-                current_fail = 0
-                
+            current_fail = int(failed_count_str) if failed_count_str.isdigit() else 0
             new_fail = current_fail + 1
             ws.update_cell(cell.row, 12, str(new_fail))
-            
             if new_fail >= 10:
                 lock_until = now + timedelta(minutes=30)
-                lock_str = lock_until.strftime('%Y-%m-%d %H:%M:%S')
-                ws.update_cell(cell.row, 13, lock_str)
-                return False, "ログインに連続して失敗したため、アカウントを一時的にロックしました（30分間）。", "", "", ""
-            
+                ws.update_cell(cell.row, 13, lock_until.strftime('%Y-%m-%d %H:%M:%S'))
+                return False, "連続失敗のためアカウントを一時的にロックしました（30分間）。", "", "", ""
             return False, "ユーザーIDまたはパスワードが間違っています", "", "", ""
-
-    except Exception as e:
-        return False, f"ログイン処理エラー: {e}", "", "", ""
+    except Exception as e: return False, f"ログイン処理エラー: {e}", "", "", ""
 
 def update_user_password(client, user_id, new_password):
     try:
@@ -417,13 +350,11 @@ def update_user_password(client, user_id, new_password):
         ws = sh.worksheet(USERS_SHEET_NAME)
         cell = ws.find(str(user_id))
         if cell:
-            new_hash = hash_password(new_password)
-            ws.update_cell(cell.row, 3, new_hash)
+            ws.update_cell(cell.row, 3, hash_password(new_password))
             get_users_df.clear()
             return True, "パスワードを変更しました"
         return False, "ユーザーが見つかりません"
-    except Exception as e:
-        return False, f"更新エラー: {e}"
+    except Exception as e: return False, f"更新エラー: {e}"
 
 def update_user_secret(client, user_id, secret_key):
     try:
@@ -435,9 +366,7 @@ def update_user_secret(client, user_id, secret_key):
             get_users_df.clear()
             return True
         return False
-    except Exception as e:
-        st.error(f"Secret保存エラー: {e}")
-        return False
+    except: return False
 
 def update_user_temp_settings(client, user_id, restriction_type, plan_id):
     try:
@@ -445,8 +374,7 @@ def update_user_temp_settings(client, user_id, restriction_type, plan_id):
         ws = sh.worksheet(USERS_SHEET_NAME)
         cell = ws.find(str(user_id))
         if cell:
-            val = f"{restriction_type},{plan_id}"
-            ws.update_cell(cell.row, 14, val)
+            ws.update_cell(cell.row, 14, f"{restriction_type},{plan_id}")
             return True
         return False
     except: return False
@@ -456,11 +384,8 @@ def get_user_temp_settings(client, user_id):
         users_df = get_users_df(client)
         row = users_df[users_df['ユーザーID'] == str(user_id)]
         if not row.empty:
-            val = str(row.iloc[0].get('temp_plan_settings', 'all,plan_9000'))
-            parts = val.split(',')
-            if len(parts) >= 2:
-                return parts[0], parts[1]
-            return 'all', 'plan_9000'
+            parts = str(row.iloc[0].get('temp_plan_settings', 'all,plan_9000')).split(',')
+            if len(parts) >= 2: return parts[0], parts[1]
         return 'all', 'plan_9000'
     except: return 'all', 'plan_9000'
 
@@ -475,7 +400,6 @@ def update_user_stripe_data(client, user_id, stripe_id=None, subscription_id=Non
             if plan_id is not None: ws.update_cell(cell.row, 6, plan_id)
             if restriction_type is not None: ws.update_cell(cell.row, 8, restriction_type)
             if valid_until is not None: ws.update_cell(cell.row, 9, valid_until)
-            
             get_users_df.clear()
             return True
     except Exception as e:
@@ -485,7 +409,7 @@ def update_user_stripe_data(client, user_id, stripe_id=None, subscription_id=Non
 # ==========================================
 #   通知設定用
 # ==========================================
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=15) # ★ キャッシュ時間を短くし、スプレッドシートの変更がすぐ反映されるようにしました
 def get_choices_df(_client):
     try:
         sh = _client.open_by_key(SPREADSHEET_ID)
@@ -506,12 +430,10 @@ def load_data(_client):
         final_cols = ['ユーザーID', '検索条件', 'キーワード']
         if not data: return pd.DataFrame(columns=final_cols)
         df = pd.DataFrame(data[1:], columns=data[0]).astype(str)
-        if 'サイト' in df.columns:
-            if '検索条件' not in df.columns: df['検索条件'] = df['サイト'] + " - " + df['カテゴリ']
-        
+        if 'サイト' in df.columns and '検索条件' not in df.columns:
+            df['検索条件'] = df['サイト'] + " - " + df['カテゴリ']
         if 'ブランドキーワード' in df.columns and 'キーワード' not in df.columns:
             df['キーワード'] = df['ブランドキーワード']
-            
         for col in final_cols:
             if col not in df.columns: df[col] = ""
         return df[final_cols]
@@ -525,7 +447,8 @@ def get_allowed_options(client, restriction_type):
     for _, row in choices_df.drop_duplicates().iterrows():
         site = str(row.get('サイト', '')).strip()
         cat = str(row.get('カテゴリ', '')).strip()
-        kind = str(row.get('種類', '')).strip()
+        # ★ 全角スペースなどが混じっていても正しく判定できるように強化しました
+        kind = str(row.get('種類', '')).replace(' ', '').replace('　', '').strip()
         
         if not site: continue
         combo_name = f"{site} - {cat}"
@@ -534,12 +457,9 @@ def get_allowed_options(client, restriction_type):
         if kind == 'アパレル': item_type = 'apparel'
         elif kind == 'アパレル以外': item_type = 'not_apparel'
         
-        if restriction_type == 'all':
-            allowed.append(combo_name)
-        elif restriction_type == 'apparel' and item_type == 'apparel':
-            allowed.append(combo_name)
-        elif restriction_type == 'not_apparel' and item_type == 'not_apparel':
-            allowed.append(combo_name)
+        if restriction_type == 'all': allowed.append(combo_name)
+        elif restriction_type == 'apparel' and item_type == 'apparel': allowed.append(combo_name)
+        elif restriction_type == 'not_apparel' and item_type == 'not_apparel': allowed.append(combo_name)
             
     return sorted(list(set(allowed)))
 
@@ -547,8 +467,7 @@ def validate_keywords(df):
     for index, row in df.iterrows():
         kws = str(row['キーワード']).replace('、', ',').split(',')
         kws = [k for k in kws if k.strip()]
-        if len(kws) > 20:
-            return False, f"エラー: {row['検索条件']} のキーワードが多すぎます（最大20単語まで）"
+        if len(kws) > 20: return False, f"エラー: {row['検索条件']} のキーワードが多すぎます（最大20単語まで）"
     return True, ""
 
 def save_merged_data(client, full_df, edited_display_df, user_id, restriction_type):
@@ -559,23 +478,19 @@ def save_merged_data(client, full_df, edited_display_df, user_id, restriction_ty
             return None
         
         allowed_opts = get_allowed_options(client, restriction_type)
-        for i, row in edited_display_df.iterrows():
-            combo = row['検索条件']
-            if combo and combo not in allowed_opts and pd.notna(combo) and str(combo).strip() != "" and str(combo) != "None" and str(combo) != "(設定エラー)":
-                r_text = "アパレルのみ" if restriction_type == "apparel" else "アパレル以外のみ"
-                if restriction_type == "all": r_text = "全て"
-                
-                st.error(f"保存失敗: 「{combo}」は現在のプラン設定（{r_text}）では選択できません。削除してください。")
-                return None
-
         new_rows = []
         for i, row in edited_display_df.iterrows():
-            combo = row['検索条件']
-            keywords = row['キーワード']
+            combo = str(row.get('検索条件', '')).strip()
+            keywords = str(row.get('キーワード', '')).strip()
             
-            # 空の行やエラー用プレースホルダーは保存しない
-            if pd.isna(combo) or str(combo).strip() == "" or str(combo) == "None" or str(combo) == "(設定エラー)": 
-                continue
+            # 空のデータやエラープレースホルダーは保存をスキップ
+            if combo in ["", "None", "nan", "NaN", "(データなし)"]: continue
+            
+            if combo not in allowed_opts:
+                r_text = "アパレルのみ" if restriction_type == "apparel" else "アパレル以外のみ"
+                if restriction_type == "all": r_text = "全て"
+                st.error(f"保存失敗: 「{combo}」は現在のプラン設定（{r_text}）では選択できません。削除してください。")
+                return None
             
             new_rows.append({'ユーザーID': str(user_id), '検索条件': combo, 'キーワード': keywords})
         
@@ -608,61 +523,35 @@ def main():
 
     ensure_users_sheet(client)
 
-    # ----------------------------------------
-    # ★ 決済完了後のコールバック処理 (Stripe Checkoutからの戻り)
-    # ----------------------------------------
     if "session_id" in st.query_params:
         session_id = st.query_params["session_id"]
-        
         with st.spinner("お支払いを処理しています..."):
             session = get_stripe_session_details(session_id)
             if session and session.payment_status == 'paid':
-                
-                target_uid = session.metadata.get('user_id')
-                if not target_uid:
-                    target_uid = session.client_reference_id
-
+                target_uid = session.metadata.get('user_id') or session.client_reference_id
                 if target_uid:
                     users_df = get_users_df(client)
                     target_user = users_df[users_df['ユーザーID'] == str(target_uid)]
-                    
                     if not target_user.empty:
-                        stripe_cust_id = session.customer
-                        stripe_sub_id = session.subscription
-                        
                         saved_restriction, saved_plan_id = get_user_temp_settings(client, target_uid)
-                        
                         update_user_stripe_data(
-                            client, target_uid, 
-                            stripe_id=stripe_cust_id, 
-                            subscription_id=stripe_sub_id, 
-                            plan_id=saved_plan_id, 
-                            restriction_type=saved_restriction, 
-                            valid_until="" 
+                            client, target_uid, stripe_id=session.customer, 
+                            subscription_id=session.subscription, plan_id=saved_plan_id, 
+                            restriction_type=saved_restriction, valid_until="" 
                         )
-                        
                         st.balloons()
                         st.success("🎉 お支払いが完了しました！プランが有効になりました。")
                         time.sleep(3)
                         st.query_params.clear()
-                        
                         st.session_state['logged_in_user_id'] = target_uid
                         st.session_state['logged_in_user_name'] = target_user.iloc[0]['ユーザー名']
                         st.rerun()
-                    else:
-                        st.error("ユーザー情報の照合に失敗しました。")
-                else:
-                    st.error("セッション情報からユーザーを特定できませんでした。")
+                    else: st.error("ユーザー情報の照合に失敗しました。")
+                else: st.error("セッション情報からユーザーを特定できませんでした。")
             else:
                 st.error("お支払いが完了していないか、セッションが無効です。")
-                if st.button("トップへ戻る"):
-                    st.query_params.clear()
-                    st.rerun()
+                if st.button("トップへ戻る"): st.query_params.clear(); st.rerun()
         st.stop()
-
-    # ----------------------------------------
-    # 以下、通常のアプリフロー
-    # ----------------------------------------
 
     if 'logged_in_user_id' not in st.session_state:
         st.session_state['logged_in_user_id'] = None
@@ -681,21 +570,16 @@ def main():
             col1, col2 = st.columns([1, 1])
             with col1:
                 if st.button("認証する", type="primary"):
-                    secret = st.session_state['temp_login_secret']
-                    totp = pyotp.TOTP(secret)
+                    totp = pyotp.TOTP(st.session_state['temp_login_secret'])
                     if totp.verify(otp_code):
                         st.session_state['logged_in_user_id'] = st.session_state['temp_login_user_id']
                         st.session_state['logged_in_user_name'] = st.session_state['temp_login_user_name']
                         st.session_state['temp_login_user_id'] = None
-                        st.session_state['temp_login_user_name'] = None
                         st.session_state['temp_login_secret'] = None
                         st.rerun()
-                    else:
-                        st.error("コードが正しくありません")
+                    else: st.error("コードが正しくありません")
             with col2:
-                if st.button("キャンセル"):
-                    st.session_state['temp_login_user_id'] = None
-                    st.rerun()
+                if st.button("キャンセル"): st.session_state['temp_login_user_id'] = None; st.rerun()
             st.stop()
 
         st.markdown("## 📊 ツウチマネージャー (市場リサーチツール)")
@@ -705,10 +589,9 @@ def main():
         Web上の公開情報をシステムが整理して提供することで、市場調査や適正価格の把握にかかる時間を短縮し、業務効率化を支援します。
         
         **【料金プラン】**
-        当サービスは月額制のサブスクリプションです。
-        * **ライトプラン (月額 5,000円)** : アパレルまたはそれ以外の片方カテゴリのみ利用可能
-        * **フルプラン (月額 9,000円)** : 全てのカテゴリが利用可能
-        * **キーワード通知オプション (+月額 2,000円)** : 特定のキーワードによる絞り込み機能を追加
+        * **ライトプラン (月額 5,000円)** : アパレルまたはそれ以外の片方カテゴリのみ
+        * **フルプラン (月額 9,000円)** : 全てのカテゴリ
+        * **キーワード通知オプション (+月額 2,000円)** : キーワード絞り込み機能
         """)
         st.markdown("---")
         st.info("👇 既存ユーザーはログイン、新規の方はご登録をお願いいたします。")
@@ -729,10 +612,8 @@ def main():
                         st.session_state['logged_in_user_id'] = uid
                         st.session_state['logged_in_user_name'] = uname
                         st.rerun()
-                else:
-                    st.error(msg)
+                else: st.error(msg)
         with tab2:
-            st.info("DiscordユーザーIDを入力してください")
             r_id = st.text_input("Discord ID", key="ri", max_chars=50)
             r_name = st.text_input("表示名", key="rn", max_chars=50)
             r_pass = st.text_input("パスワード", type="password", key="rp", max_chars=50)
@@ -740,9 +621,7 @@ def main():
                 if not r_id or not r_name or not r_pass: st.error("入力不足")
                 else:
                     suc, msg = register_user(client, r_id, r_name, r_pass)
-                    if suc: 
-                        st.success(msg)
-                        st.balloons()
+                    if suc: st.success(msg); st.balloons()
                     else: st.error(msg)
         
         show_tokushoho()
@@ -758,40 +637,30 @@ def main():
         st.stop()
         
     user_row = users_df[users_df['ユーザーID'] == str(uid)].iloc[0]
-    
     sub_id = str(user_row.get('subscription_id', ''))
     current_plan_id = str(user_row.get('plan_id', ''))
     channel_url = str(user_row.get('チャンネルURL', ''))
     restriction_type = str(user_row.get('plan', 'all'))
     if not restriction_type: restriction_type = 'all'
-    
     user_secret_key = str(user_row.get('secret_key', '')).strip()
     
     valid_until_str = str(user_row.get('valid_until', '')).strip()
     is_period_active = False
-    
     if valid_until_str:
         try:
             v_date_str = valid_until_str.split(' ')[0] 
-            v_date = datetime.strptime(v_date_str, '%Y/%m/%d')
-            now_jst = datetime.now(timezone(timedelta(hours=9)))
-            if now_jst.date() <= v_date.date():
+            if datetime.now(timezone(timedelta(hours=9))).date() <= datetime.strptime(v_date_str, '%Y/%m/%d').date():
                 is_period_active = True
-        except:
-            pass
+        except: pass
 
-    has_active_subscription = (sub_id != "" and sub_id.lower() != "nan" and sub_id.lower() != "none")
+    has_active_subscription = (sub_id != "" and sub_id.lower() not in ["nan", "none"])
     is_access_allowed = has_active_subscription or is_period_active
-
-    opt_ids = [PLANS["full"]["opt_id"], PLANS["light"]["opt_id"]]
-    has_option = (current_plan_id in opt_ids)
+    has_option = (current_plan_id in [PLANS["full"]["opt_id"], PLANS["light"]["opt_id"]])
 
     with st.sidebar:
         st.write(f"User: **{uname}**")
         menu = st.radio("メニュー", ["通知設定", "プラン契約・解約", "アカウント設定"])
-        if st.button("ログアウト"):
-            st.session_state['logged_in_user_id'] = None
-            st.rerun()
+        if st.button("ログアウト"): st.session_state['logged_in_user_id'] = None; st.rerun()
 
     full_df = load_data(client)
 
@@ -806,25 +675,41 @@ def main():
         if not has_active_subscription and is_period_active:
             st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) までは機能をご利用いただけます。")
 
+        # =========================================================
+        # ★ 修正ポイント1: 選択肢の取得と、失敗した時のデバッグUI表示
+        # =========================================================
         allowed_opts = get_allowed_options(client, restriction_type)
         if not allowed_opts:
-            st.error("⚠️ 選択可能なカテゴリが見つかりません。スプレッドシートの「管理」シート（列：サイト, カテゴリ, 種類）が正しく設定されているか確認してください。")
-            allowed_opts = ["(設定エラー)"]
-        
+            st.error("⚠️ スプレッドシートの「管理」シートから、現在のプランで選択できるカテゴリが見つかりませんでした。")
+            with st.expander("🔍 原因を調べる（クリックして展開）"):
+                debug_df = get_choices_df(client)
+                st.write(f"・「管理」シートから取得できたデータ数: **{len(debug_df)}件**")
+                st.write(f"・あなたの現在のプラン設定: **{restriction_type}**")
+                st.write("【よくある原因】")
+                st.write("1. 「管理」シートの1行目の列名が「サイト」「カテゴリ」「種類」に完全一致していない。")
+                st.write("2. 「種類」列に「アパレル」または「アパレル以外」という文字が入っていない（空白や別の言葉になっている）。")
+                st.write("👇 現在プログラム側が読み取っている「管理」シートの中身は以下の通りです。")
+                st.dataframe(debug_df)
+            allowed_opts = ["(データなし)"]
+
+        # =========================================================
+        # ★ 修正ポイント2: 完全に空のデータフレームを作り、型を文字列に固定する
+        # （ダミー行はもう作りません。枠だけが表示されます）
+        # =========================================================
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
-        display_df = user_df[['検索条件', 'キーワード']] if '検索条件' in user_df.columns else pd.DataFrame(columns=['検索条件', 'キーワード'])
         
-        # ▼▼▼ 追加修正: スプレッドシート上に「None」や空のゴミデータが保存されている場合は、読み込み時に除外する ▼▼▼
-        if not display_df.empty:
-            invalid_vals = ['None', 'none', 'nan', 'NaN', '']
+        if not user_df.empty and '検索条件' in user_df.columns:
+            display_df = user_df[['検索条件', 'キーワード']].copy()
+            # 過去のバグで残ってしまったゴミデータ（Noneなど）は無視する
+            invalid_vals = ['None', 'none', 'nan', 'NaN', '', '(設定エラー)', '(データなし)']
             display_df = display_df[~display_df['検索条件'].astype(str).str.strip().isin(invalid_vals)]
-            
-        if display_df.empty:
-            default_val = allowed_opts[0] if len(allowed_opts) > 0 else ""
-            display_df = pd.DataFrame([{"検索条件": default_val, "キーワード": ""}])
         else:
-            display_df = display_df.reset_index(drop=True)
-        # ▲▲▲ 追加修正ここまで ▲▲▲
+            display_df = pd.DataFrame(columns=['検索条件', 'キーワード'])
+
+        # 謎の列（インデックス）が出ないようにリセットし、文字列型を強制する
+        display_df = display_df.reset_index(drop=True)
+        display_df['検索条件'] = display_df['検索条件'].astype(str)
+        display_df['キーワード'] = display_df['キーワード'].astype(str)
 
         if current_plan_id.startswith(PLANS["full"]["base_id"]) or current_plan_id == PLANS["full"]["opt_id"]:
              st.info("💎 **フルプラン契約中**")
@@ -854,6 +739,7 @@ def main():
             hide_index=True,
             column_config={
                 "検索条件": st.column_config.SelectboxColumn(
+                    "検索条件",  # カラム名を明示
                     options=allowed_opts
                 ),
                 "キーワード": st.column_config.TextColumn(
@@ -874,15 +760,12 @@ def main():
             st.success("✅ **現在プラン契約中です** (次回更新あり)")
             
             current_plan_name = "不明"
-            is_full = False
-            is_light = False
+            is_full = False; is_light = False
             
             if current_plan_id in [PLANS["full"]["base_id"], PLANS["full"]["opt_id"]]:
-                is_full = True
-                current_plan_name = PLANS["full"]["name"]
+                is_full = True; current_plan_name = PLANS["full"]["name"]
             elif current_plan_id in [PLANS["light"]["base_id"], PLANS["light"]["opt_id"]]:
-                is_light = True
-                current_plan_name = PLANS["light"]["name"]
+                is_light = True; current_plan_name = PLANS["light"]["name"]
                 
             if has_option: current_plan_name += " + オプション"
             
@@ -894,229 +777,121 @@ def main():
             
             with st.expander("🔄 プラン内容を変更する"):
                 st.info("プラン変更やオプションの追加・解除を行います。")
-                
-                new_plan_key = st.radio("プラン選択", ["full", "light"], 
-                                        index=0 if is_full else 1,
-                                        format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['base_price']:,}/月")
-                
+                new_plan_key = st.radio("プラン選択", ["full", "light"], index=0 if is_full else 1, format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['base_price']:,}/月")
                 new_restriction = "all"
                 if new_plan_key == "light":
-                    default_idx = 0
-                    if restriction_type == "not_apparel": default_idx = 1
-                    
-                    sub_choice = st.radio(
-                        "カテゴリ選択", 
-                        ["apparel", "not_apparel"],
-                        index=default_idx,
-                        format_func=lambda x: "👜 アパレル" if x == "apparel" else "📷 アパレル以外"
-                    )
+                    sub_choice = st.radio("カテゴリ選択", ["apparel", "not_apparel"], index=1 if restriction_type == "not_apparel" else 0, format_func=lambda x: "👜 アパレル" if x == "apparel" else "📷 アパレル以外")
                     new_restriction = sub_choice
                 
                 new_option = st.checkbox(f"✨ **キーワード通知オプション (+¥{OPTION_PRICE:,})**", value=has_option)
-                
-                new_base_price = PLANS[new_plan_key]['base_price']
-                new_total_price = new_base_price + (OPTION_PRICE if new_option else 0)
+                new_total_price = PLANS[new_plan_key]['base_price'] + (OPTION_PRICE if new_option else 0)
                 new_target_id = PLANS[new_plan_key]['opt_id'] if new_option else PLANS[new_plan_key]['base_id']
                 
                 st.write(f"**変更後の料金**: ¥{new_total_price:,} / 月")
-                
                 if st.button("プランを変更する"):
-                    is_plan_changed = (new_target_id != current_plan_id)
-                    is_res_changed = (new_restriction != restriction_type)
-                    
-                    if not is_plan_changed and not is_res_changed:
-                        st.warning("変更内容がありません。")
+                    if new_target_id == current_plan_id and new_restriction == restriction_type: st.warning("変更内容がありません。")
                     else:
                         with st.spinner("変更処理中..."):
                             success_update = True
-                            if is_plan_changed:
+                            if new_target_id != current_plan_id:
                                 suc, msg = change_stripe_subscription_plan(sub_id, new_target_id)
-                                if not suc:
-                                    st.error(f"Stripe更新エラー: {msg}")
-                                    success_update = False
-                            
+                                if not suc: st.error(f"Stripe更新エラー: {msg}"); success_update = False
                             if success_update:
                                 update_user_stripe_data(client, uid, plan_id=new_target_id, restriction_type=new_restriction)
-                                st.success("プラン変更が完了しました！")
-                                time.sleep(2)
-                                st.rerun()
+                                st.success("プラン変更が完了しました！"); time.sleep(2); st.rerun()
 
             st.markdown("---")
             if st.button("プランを解約する"):
                 with st.spinner("解約処理中..."):
                     suc, msg = cancel_stripe_subscription_at_period_end(sub_id)
-                    
                     if suc:
                         update_user_stripe_data(client, uid, subscription_id="", valid_until=msg)
-                        st.success(f"解約予約を受け付けました。{msg} までは引き続きご利用いただけます。")
-                        time.sleep(3)
-                        st.rerun()
-                    else:
-                        st.error(f"解約エラー: {msg}")
+                        st.success(f"解約予約を受け付けました。{msg} までは引き続きご利用いただけます。"); time.sleep(3); st.rerun()
+                    else: st.error(f"解約エラー: {msg}")
 
         elif not has_active_subscription and is_period_active:
             st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) までは現在のプランをご利用いただけます。")
             st.info("再度契約を再開したい場合は、以下からプランを選択してください。")
-            
             plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['base_price']:,}/月")
-            selected_plan = PLANS[plan_key]
-            
             selected_restriction = "all"
-            if plan_key == "light":
-                st.markdown("👇 **通知を受け取るカテゴリを選択してください**")
-                sub_choice = st.radio(
-                    "カテゴリ選択", 
-                    ["apparel", "not_apparel"], 
-                    format_func=lambda x: "👜 アパレル" if x == "apparel" else "📷 アパレル以外"
-                )
-                selected_restriction = sub_choice
-            
+            if plan_key == "light": selected_restriction = st.radio("カテゴリ選択", ["apparel", "not_apparel"], format_func=lambda x: "👜 アパレル" if x == "apparel" else "📷 アパレル以外")
             st.markdown("---")
             use_option = st.checkbox(f"✨ **キーワード通知オプションを追加する (+¥{OPTION_PRICE:,})**")
-            
-            final_price = selected_plan['base_price'] + (OPTION_PRICE if use_option else 0)
-            target_plan_id = selected_plan['opt_id'] if use_option else selected_plan['base_id']
+            final_price = PLANS[plan_key]['base_price'] + (OPTION_PRICE if use_option else 0)
+            target_plan_id = PLANS[plan_key]['opt_id'] if use_option else PLANS[plan_key]['base_id']
 
-            st.write(f"**選択中: {selected_plan['name']}**")
+            st.write(f"**選択中: {PLANS[plan_key]['name']}**")
             st.subheader(f"ご請求額: ¥{final_price:,} / 月")
-            
             if st.button("定期購読を再開する (Stripeへ移動)"):
                 if not stripe.api_key: st.error("API設定エラー"); st.stop()
-                
                 with st.spinner("決済ページを準備中..."):
                     update_user_temp_settings(client, uid, selected_restriction, target_plan_id)
                     suc, url_or_msg = create_stripe_checkout_session(uid, target_plan_id)
-                    
-                    if suc:
-                        st.link_button("👉 ここをクリックして支払いを完了させる", url_or_msg, type="primary")
-                    else:
-                        st.error(f"エラー: {url_or_msg}")
-
+                    if suc: st.link_button("👉 ここをクリックして支払いを完了させる", url_or_msg, type="primary")
+                    else: st.error(f"エラー: {url_or_msg}")
         else:
             st.info("利用を開始するには、以下のプランから選択してください。")
             plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['base_price']:,}/月")
-            selected_plan = PLANS[plan_key]
-            
             selected_restriction = "all"
-            if plan_key == "light":
-                st.markdown("👇 **通知を受け取るカテゴリを選択してください**")
-                sub_choice = st.radio(
-                    "カテゴリ選択", 
-                    ["apparel", "not_apparel"], 
-                    format_func=lambda x: "👜 アパレル" if x == "apparel" else "📷 アパレル以外"
-                )
-                selected_restriction = sub_choice
-            
+            if plan_key == "light": selected_restriction = st.radio("カテゴリ選択", ["apparel", "not_apparel"], format_func=lambda x: "👜 アパレル" if x == "apparel" else "📷 アパレル以外")
             st.markdown("---")
             use_option = st.checkbox(f"✨ **キーワード通知オプションを追加する (+¥{OPTION_PRICE:,})**")
-            
-            final_price = selected_plan['base_price'] + (OPTION_PRICE if use_option else 0)
-            target_plan_id = selected_plan['opt_id'] if use_option else selected_plan['base_id']
+            final_price = PLANS[plan_key]['base_price'] + (OPTION_PRICE if use_option else 0)
+            target_plan_id = PLANS[plan_key]['opt_id'] if use_option else PLANS[plan_key]['base_id']
 
-            st.markdown("---")
-            st.write(f"**選択中: {selected_plan['name']}**")
-            if plan_key == "light":
-                disp_text = "👜 アパレル" if selected_restriction == "apparel" else "📷 アパレル以外"
-                st.info(f"選択カテゴリ: {disp_text}")
-            
-            if use_option:
-                st.success(f"オプション適用: あり (+¥{OPTION_PRICE:,})")
-            
+            st.write(f"**選択中: {PLANS[plan_key]['name']}**")
+            if plan_key == "light": st.info(f"選択カテゴリ: {'👜 アパレル' if selected_restriction == 'apparel' else '📷 アパレル以外'}")
+            if use_option: st.success(f"オプション適用: あり (+¥{OPTION_PRICE:,})")
             st.subheader(f"ご請求額: ¥{final_price:,} / 月")
-            
             if st.button("お支払い画面へ進む (Stripeへ移動)"):
-                if not stripe.api_key:
-                    st.error("API設定エラー: Stripe APIキーが設定されていません")
-                    st.stop()
-
+                if not stripe.api_key: st.error("API設定エラー"); st.stop()
                 with st.spinner("決済ページを準備中..."):
                     update_user_temp_settings(client, uid, selected_restriction, target_plan_id)
                     suc, url_or_msg = create_stripe_checkout_session(uid, target_plan_id)
-                    
-                    if suc:
-                        st.link_button("👉 ここをクリックして支払いを完了させる", url_or_msg, type="primary")
-                    else:
-                        st.error(f"エラー: {url_or_msg}")
+                    if suc: st.link_button("👉 ここをクリックして支払いを完了させる", url_or_msg, type="primary")
+                    else: st.error(f"エラー: {url_or_msg}")
 
     elif menu == "アカウント設定":
         st.subheader("⚙️ アカウント設定")
-
         with st.expander("🔑 パスワードの変更", expanded=False):
-            st.info("セキュリティのため、定期的な変更をおすすめします。")
             with st.form("password_reset_form"):
                 current_pw = st.text_input("現在のパスワード", type="password")
                 new_pw = st.text_input("新しいパスワード", type="password")
                 new_pw_confirm = st.text_input("新しいパスワード（確認）", type="password")
-                submit_pw = st.form_submit_button("パスワードを変更する")
-
-            if submit_pw:
-                if not current_pw or not new_pw or not new_pw_confirm:
-                    st.error("全ての項目を入力してください")
-                elif new_pw != new_pw_confirm:
-                    st.error("新しいパスワードが一致しません")
-                else:
-                    current_hash = user_row.get('パスワードハッシュ', '')
-                    if hash_password(current_pw) != current_hash:
-                        st.error("現在のパスワードが間違っています")
+                if st.form_submit_button("パスワードを変更する"):
+                    if not current_pw or not new_pw or not new_pw_confirm: st.error("全ての項目を入力してください")
+                    elif new_pw != new_pw_confirm: st.error("新しいパスワードが一致しません")
+                    elif hash_password(current_pw) != user_row.get('パスワードハッシュ', ''): st.error("現在のパスワードが間違っています")
                     else:
                         with st.spinner("更新中..."):
                             suc, msg = update_user_password(client, uid, new_pw)
                             if suc: st.success(msg)
                             else: st.error(msg)
-        
         st.markdown("---")
         st.subheader("🛡️ 2段階認証 (2FA)")
-        
         if user_secret_key:
             st.success("✅ **2段階認証は現在「有効」です**")
-            st.info("解除するには下のボタンを押してください。")
             if st.button("2段階認証を解除する", type="primary"):
-                if update_user_secret(client, uid, ""):
-                    st.warning("2段階認証を解除しました。")
-                    time.sleep(1)
-                    st.rerun()
+                if update_user_secret(client, uid, ""): st.warning("2段階認証を解除しました。"); time.sleep(1); st.rerun()
         else:
             st.warning("⚠️ **2段階認証は設定されていません**")
-            st.write("設定すると、ログイン時に認証アプリ（Google Authenticatorなど）のコード入力が必要になります。")
-            
-            if '2fa_setup_secret' not in st.session_state:
-                st.session_state['2fa_setup_secret'] = pyotp.random_base32()
-            
+            if '2fa_setup_secret' not in st.session_state: st.session_state['2fa_setup_secret'] = pyotp.random_base32()
             secret = st.session_state['2fa_setup_secret']
-            
             uri = pyotp.totp.TOTP(secret).provisioning_uri(name=uname, issuer_name="MyApp")
             qr_img = qrcode.make(uri)
-            
             img_byte_arr = io.BytesIO()
             qr_img.save(img_byte_arr, format='PNG')
-            img_byte_arr = img_byte_arr.getvalue()
-
             col1, col2 = st.columns([1, 2])
-            with col1:
-                st.image(img_byte_arr, caption="認証アプリでスキャン", width=200)
+            with col1: st.image(img_byte_arr.getvalue(), caption="認証アプリでスキャン", width=200)
             with col2:
-                st.markdown(
-                    f"""
-                    1. Google Authenticator等のアプリで左のQRコードをスキャンしてください。
-                    2. 表示された6桁のコードを以下に入力して「有効にする」を押してください。
-                    
-                    **シークレットキー (手入力用):** `{secret}`
-                    """
-                )
+                st.markdown(f"1. アプリでスキャン\n2. 6桁のコードを入力\n\n**シークレットキー:** `{secret}`")
                 verify_code = st.text_input("6桁のコード", max_chars=6, key="otp_setup")
-                
                 if st.button("有効にする"):
-                    totp = pyotp.TOTP(secret)
-                    if totp.verify(verify_code):
+                    if pyotp.TOTP(secret).verify(verify_code):
                         if update_user_secret(client, uid, secret):
-                            st.success("🎉 2段階認証が有効になりました！")
-                            del st.session_state['2fa_setup_secret']
-                            time.sleep(2)
-                            st.rerun()
-                        else:
-                            st.error("設定の保存に失敗しました。")
-                    else:
-                        st.error("コードが間違っています。もう一度確認してください。")
+                            st.success("🎉 有効になりました！"); del st.session_state['2fa_setup_secret']; time.sleep(2); st.rerun()
+                        else: st.error("保存失敗")
+                    else: st.error("コード間違い")
 
 if __name__ == "__main__":
     main()
