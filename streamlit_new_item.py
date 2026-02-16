@@ -493,7 +493,9 @@ def get_choices_df(_client):
         except: return pd.DataFrame(columns=['サイト', 'カテゴリ', '種類'])
         data = sheet.get_all_values()
         if len(data) < 2: return pd.DataFrame(columns=['サイト', 'カテゴリ', '種類'])
-        return pd.DataFrame(data[1:], columns=data[0]).astype(str)
+        
+        headers = [str(h).strip() for h in data[0]]
+        return pd.DataFrame(data[1:], columns=headers).astype(str)
     except: return pd.DataFrame(columns=['サイト', 'カテゴリ', '種類'])
 
 @st.cache_data(ttl=60)
@@ -559,7 +561,7 @@ def save_merged_data(client, full_df, edited_display_df, user_id, restriction_ty
         allowed_opts = get_allowed_options(client, restriction_type)
         for i, row in edited_display_df.iterrows():
             combo = row['検索条件']
-            if combo and combo not in allowed_opts and pd.notna(combo) and str(combo).strip() != "" and str(combo) != "None":
+            if combo and combo not in allowed_opts and pd.notna(combo) and str(combo).strip() != "" and str(combo) != "None" and str(combo) != "(設定エラー)":
                 r_text = "アパレルのみ" if restriction_type == "apparel" else "アパレル以外のみ"
                 if restriction_type == "all": r_text = "全て"
                 
@@ -571,8 +573,8 @@ def save_merged_data(client, full_df, edited_display_df, user_id, restriction_ty
             combo = row['検索条件']
             keywords = row['キーワード']
             
-            # ▼▼▼ 修正箇所: 空の行（Noneや空文字）は無視して保存しないように強化 ▼▼▼
-            if pd.isna(combo) or str(combo).strip() == "" or str(combo) == "None": 
+            # 空の行やエラー用プレースホルダーは保存しない
+            if pd.isna(combo) or str(combo).strip() == "" or str(combo) == "None" or str(combo) == "(設定エラー)": 
                 continue
             
             new_rows.append({'ユーザーID': str(user_id), '検索条件': combo, 'キーワード': keywords})
@@ -805,14 +807,24 @@ def main():
             st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) までは機能をご利用いただけます。")
 
         allowed_opts = get_allowed_options(client, restriction_type)
+        if not allowed_opts:
+            st.error("⚠️ 選択可能なカテゴリが見つかりません。スプレッドシートの「管理」シート（列：サイト, カテゴリ, 種類）が正しく設定されているか確認してください。")
+            allowed_opts = ["(設定エラー)"]
         
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
         display_df = user_df[['検索条件', 'キーワード']] if '検索条件' in user_df.columns else pd.DataFrame(columns=['検索条件', 'キーワード'])
         
+        # ▼▼▼ 追加修正: スプレッドシート上に「None」や空のゴミデータが保存されている場合は、読み込み時に除外する ▼▼▼
+        if not display_df.empty:
+            invalid_vals = ['None', 'none', 'nan', 'NaN', '']
+            display_df = display_df[~display_df['検索条件'].astype(str).str.strip().isin(invalid_vals)]
+            
         if display_df.empty:
-            display_df = pd.DataFrame([{"検索条件": None, "キーワード": None}])
+            default_val = allowed_opts[0] if len(allowed_opts) > 0 else ""
+            display_df = pd.DataFrame([{"検索条件": default_val, "キーワード": ""}])
         else:
             display_df = display_df.reset_index(drop=True)
+        # ▲▲▲ 追加修正ここまで ▲▲▲
 
         if current_plan_id.startswith(PLANS["full"]["base_id"]) or current_plan_id == PLANS["full"]["opt_id"]:
              st.info("💎 **フルプラン契約中**")
@@ -841,7 +853,6 @@ def main():
             use_container_width=True, 
             hide_index=True,
             column_config={
-                # ▼▼▼ 修正箇所: required=True を削除 ▼▼▼
                 "検索条件": st.column_config.SelectboxColumn(
                     options=allowed_opts
                 ),
