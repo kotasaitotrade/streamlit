@@ -414,13 +414,13 @@ def get_choices_df(_client):
     try:
         sh = _client.open_by_key(SPREADSHEET_ID)
         try: sheet = sh.worksheet(CHOICES_SHEET_NAME)
-        except: return pd.DataFrame(columns=['サイト', 'カテゴリ', '種類'])
+        except: return pd.DataFrame(columns=['サイト', 'カテゴリ', 'チャンネル'])
         data = sheet.get_all_values()
-        if len(data) < 2: return pd.DataFrame(columns=['サイト', 'カテゴリ', '種類'])
+        if len(data) < 2: return pd.DataFrame(columns=['サイト', 'カテゴリ', 'チャンネル'])
         
         headers = [str(h).strip() for h in data[0]]
         return pd.DataFrame(data[1:], columns=headers).astype(str)
-    except: return pd.DataFrame(columns=['サイト', 'カテゴリ', '種類'])
+    except: return pd.DataFrame(columns=['サイト', 'カテゴリ', 'チャンネル'])
 
 @st.cache_data(ttl=60)
 def load_data(_client):
@@ -448,7 +448,7 @@ def get_allowed_options(client, restriction_type):
         site = str(row.get('サイト', '')).strip()
         cat = str(row.get('カテゴリ', '')).strip()
         # ★ 全角スペースなどが混じっていても正しく判定できるように強化しました
-        kind = str(row.get('種類', '')).replace(' ', '').replace('　', '').strip()
+        kind = str(row.get('チャンネル', '')).replace(' ', '').replace('　', '').strip()
         
         if not site: continue
         combo_name = f"{site} - {cat}"
@@ -686,8 +686,8 @@ def main():
                 st.write(f"・「管理」シートから取得できたデータ数: **{len(debug_df)}件**")
                 st.write(f"・あなたの現在のプラン設定: **{restriction_type}**")
                 st.write("【よくある原因】")
-                st.write("1. 「管理」シートの1行目の列名が「サイト」「カテゴリ」「種類」に完全一致していない。")
-                st.write("2. 「種類」列に「アパレル」または「アパレル以外」という文字が入っていない（空白や別の言葉になっている）。")
+                st.write("1. 「管理」シートの1行目の列名が「サイト」「カテゴリ」「チャンネル」に完全一致していない。")
+                st.write("2. 「チャンネル」列に「アパレル」または「アパレル以外」という文字が入っていない（空白や別の言葉になっている）。")
                 st.write("👇 現在プログラム側が読み取っている「管理」シートの中身は以下の通りです。")
                 st.dataframe(debug_df)
             allowed_opts = ["(データなし)"]
