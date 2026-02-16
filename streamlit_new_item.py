@@ -122,7 +122,6 @@ def get_gspread_client():
         return None
     return None
 
-# ★審査突破用修正：特商法を最初から開いた状態（expanded=True）にする
 def show_tokushoho():
     st.markdown("---")
     with st.expander("⚖️ 特定商取引法に基づく表記", expanded=True):
@@ -560,7 +559,7 @@ def save_merged_data(client, full_df, edited_display_df, user_id, restriction_ty
         allowed_opts = get_allowed_options(client, restriction_type)
         for i, row in edited_display_df.iterrows():
             combo = row['検索条件']
-            if combo and combo not in allowed_opts:
+            if combo and combo not in allowed_opts and pd.notna(combo) and str(combo).strip() != "" and str(combo) != "None":
                 r_text = "アパレルのみ" if restriction_type == "apparel" else "アパレル以外のみ"
                 if restriction_type == "all": r_text = "全て"
                 
@@ -571,7 +570,11 @@ def save_merged_data(client, full_df, edited_display_df, user_id, restriction_ty
         for i, row in edited_display_df.iterrows():
             combo = row['検索条件']
             keywords = row['キーワード']
-            if not combo or not isinstance(combo, str): continue
+            
+            # ▼▼▼ 修正箇所: 空の行（Noneや空文字）は無視して保存しないように強化 ▼▼▼
+            if pd.isna(combo) or str(combo).strip() == "" or str(combo) == "None": 
+                continue
+            
             new_rows.append({'ユーザーID': str(user_id), '検索条件': combo, 'キーワード': keywords})
         
         save_user_df = pd.DataFrame(new_rows)
@@ -693,9 +696,6 @@ def main():
                     st.rerun()
             st.stop()
 
-        # =========================================================
-        # ★ 審査突破用追加: 審査員向けにサービス内容を表示
-        # =========================================================
         st.markdown("## 📊 ツウチマネージャー (市場リサーチツール)")
         st.markdown("""
         **【サービス概要】**
@@ -710,7 +710,6 @@ def main():
         """)
         st.markdown("---")
         st.info("👇 既存ユーザーはログイン、新規の方はご登録をお願いいたします。")
-        # =========================================================
 
         tab1, tab2 = st.tabs(["🔑 ログイン", "✨ 新規登録"])
         with tab1:
@@ -744,7 +743,6 @@ def main():
                         st.balloons()
                     else: st.error(msg)
         
-        # 特商法を表示 (最初から開いた状態になります)
         show_tokushoho()
         st.stop()
 
@@ -811,12 +809,10 @@ def main():
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
         display_df = user_df[['検索条件', 'キーワード']] if '検索条件' in user_df.columns else pd.DataFrame(columns=['検索条件', 'キーワード'])
         
-        # ▼▼▼ 修正箇所: データがない場合に空行を追加 ▼▼▼
         if display_df.empty:
             display_df = pd.DataFrame([{"検索条件": None, "キーワード": None}])
         else:
             display_df = display_df.reset_index(drop=True)
-        # ▲▲▲ 修正箇所 ▲▲▲
 
         if current_plan_id.startswith(PLANS["full"]["base_id"]) or current_plan_id == PLANS["full"]["opt_id"]:
              st.info("💎 **フルプラン契約中**")
@@ -845,10 +841,9 @@ def main():
             use_container_width=True, 
             hide_index=True,
             column_config={
-                # ▼▼▼ 修正箇所: "_index": None を削除 ▼▼▼
+                # ▼▼▼ 修正箇所: required=True を削除 ▼▼▼
                 "検索条件": st.column_config.SelectboxColumn(
-                    options=allowed_opts, 
-                    required=True
+                    options=allowed_opts
                 ),
                 "キーワード": st.column_config.TextColumn(
                     "キーワード (最大20個)",
