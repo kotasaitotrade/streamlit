@@ -202,7 +202,11 @@ def cancel_stripe_subscription_at_period_end(subscription_id):
         current_period_end = sub['current_period_end']
         end_date = datetime.fromtimestamp(current_period_end)
         return True, end_date.strftime('%Y/%m/%d')
-    except Exception as e: return False, str(e)
+    except Exception as e:
+        # ▼修正: Stripe側に契約がない場合（手動削除など）は、すでに解約されたものとして扱う
+        if "No such subscription" in str(e):
+            return True, "ALREADY_CANCELED"
+        return False, str(e)
 
 def change_stripe_subscription_plan(subscription_id, new_price_id):
     try:
@@ -210,7 +214,11 @@ def change_stripe_subscription_plan(subscription_id, new_price_id):
         item_id = sub['items']['data'][0].id
         stripe.Subscription.modify(subscription_id, items=[{'id': item_id, 'price': new_price_id}])
         return True, "プランを変更しました"
-    except Exception as e: return False, str(e)
+    except Exception as e:
+        # ▼修正: Stripe側に契約がない場合
+        if "No such subscription" in str(e):
+            return False, "Stripe上に有効な契約が見つかりません。一度解約ボタンを押してシステムをリセットし、再度契約してください。"
+        return False, str(e)
 
 # ==========================================
 #   ユーザー管理・DB操作
@@ -409,7 +417,7 @@ def update_user_stripe_data(client, user_id, stripe_id=None, subscription_id=Non
 # ==========================================
 #   通知設定用
 # ==========================================
-@st.cache_data(ttl=15) # ★ キャッシュ時間を短くし、スプレッドシートの変更がすぐ反映されるようにしました
+@st.cache_data(ttl=15)
 def get_choices_df(_client):
     try:
         sh = _client.open_by_key(SPREADSHEET_ID)
@@ -447,7 +455,6 @@ def get_allowed_options(client, restriction_type):
     for _, row in choices_df.drop_duplicates().iterrows():
         site = str(row.get('サイト', '')).strip()
         cat = str(row.get('カテゴリ', '')).strip()
-        # ★ 全角スペースなどが混じっていても正しく判定できるように強化しました
         kind = str(row.get('チャンネル', '')).replace(' ', '').replace('　', '').strip()
         
         if not site: continue
@@ -675,9 +682,6 @@ def main():
         if not has_active_subscription and is_period_active:
             st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) までは機能をご利用いただけます。")
 
-        # =========================================================
-        # ★ 修正ポイント1: 選択肢の取得と、失敗した時のデバッグUI表示
-        # =========================================================
         allowed_opts = get_allowed_options(client, restriction_type)
         if not allowed_opts:
             st.error("⚠️ スプレッドシートの「管理」シートから、現在のプランで選択できるカテゴリが見つかりませんでした。")
@@ -692,21 +696,15 @@ def main():
                 st.dataframe(debug_df)
             allowed_opts = ["(データなし)"]
 
-        # =========================================================
-        # ★ 修正ポイント2: 完全に空のデータフレームを作り、型を文字列に固定する
-        # （ダミー行はもう作りません。枠だけが表示されます）
-        # =========================================================
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
         
         if not user_df.empty and '検索条件' in user_df.columns:
             display_df = user_df[['検索条件', 'キーワード']].copy()
-            # 過去のバグで残ってしまったゴミデータ（Noneなど）は無視する
             invalid_vals = ['None', 'none', 'nan', 'NaN', '', '(設定エラー)', '(データなし)']
             display_df = display_df[~display_df['検索条件'].astype(str).str.strip().isin(invalid_vals)]
         else:
             display_df = pd.DataFrame(columns=['検索条件', 'キーワード'])
 
-        # 謎の列（インデックス）が出ないようにリセットし、文字列型を強制する
         display_df = display_df.reset_index(drop=True)
         display_df['検索条件'] = display_df['検索条件'].astype(str)
         display_df['キーワード'] = display_df['キーワード'].astype(str)
@@ -739,7 +737,7 @@ def main():
             hide_index=True,
             column_config={
                 "検索条件": st.column_config.SelectboxColumn(
-                    "検索条件",  # カラム名を明示
+                    "検索条件",
                     options=allowed_opts
                 ),
                 "キーワード": st.column_config.TextColumn(
@@ -804,10 +802,18 @@ def main():
             if st.button("プランを解約する"):
                 with st.spinner("解約処理中..."):
                     suc, msg = cancel_stripe_subscription_at_period_end(sub_id)
+                    
                     if suc:
-                        update_user_stripe_data(client, uid, subscription_id="", valid_until=msg)
-                        st.success(f"解約予約を受け付けました。{msg} までは引き続きご利用いただけます。"); time.sleep(3); st.rerun()
-                    else: st.error(f"解約エラー: {msg}")
+                        # ▼修正: Stripe上に存在しなかった場合は即時解約扱いにしてシステムをリセット
+                        if msg == "ALREADY_CANCELED":
+                            now_str = datetime.now(timezone(timedelta(hours=9))).strftime('%Y/%m/%d')
+                            update_user_stripe_data(client, uid, subscription_id="", valid_until=now_str)
+                            st.success("Stripe上に契約が存在しなかったため、システムの契約情報をリセットしました。"); time.sleep(3); st.rerun()
+                        else:
+                            update_user_stripe_data(client, uid, subscription_id="", valid_until=msg)
+                            st.success(f"解約予約を受け付けました。{msg} までは引き続きご利用いただけます。"); time.sleep(3); st.rerun()
+                    else:
+                        st.error(f"解約エラー: {msg}")
 
         elif not has_active_subscription and is_period_active:
             st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) までは現在のプランをご利用いただけます。")
