@@ -43,16 +43,16 @@ PLANS = {
         "desc": "アパレル・その他の全てのカテゴリを選択可能",
         "type": "all",
         "base_price": 9000,
-        "base_id": "price_1T0D0LRp7tXAl48PFa7JBztW",           # フルプラン単体
-        "opt_id": "price_1T0D1yRp7tXAl48P0ep6L76Y"            # フルプラン+OP
+        "base_id": "price_1T0D0LRp7tXAl48PFa7JBztW",            # フルプラン単体
+        "opt_id": "price_1T0D1yRp7tXAl48P0ep6L76Y"             # フルプラン+OP
     },
     "light": {
         "name": "ライトプラン (片方のみ)",
         "desc": "「アパレル」または「それ以外」のどちらか一方のみ選択可能",
         "type": "select",
         "base_price": 5000,
-        "base_id": "price_1T0CetRp7tXAl48PCcvLKVJ6",          # ライトプラン単体
-        "opt_id": "price_1T0CjERp7tXAl48PLckXXhG4"           # ライトプラン+OP
+        "base_id": "price_1T0CetRp7tXAl48PCcvLKVJ6",           # ライトプラン単体
+        "opt_id": "price_1T0CjERp7tXAl48PLckXXhG4"            # ライトプラン+OP
     }
 }
 
@@ -804,15 +804,19 @@ def main():
             st.stop()
         
         if not has_active_subscription and is_period_active:
-            st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) ま走到は機能をご利用いただけます。")
+            st.warning(f"⚠️ 解約済みですが、有効期限 ({valid_until_str}) までは機能をご利用いただけます。")
 
         allowed_opts = get_allowed_options(client, restriction_type)
         
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
         display_df = user_df[['検索条件', 'キーワード']] if '検索条件' in user_df.columns else pd.DataFrame(columns=['検索条件', 'キーワード'])
         
-        if not display_df.empty:
+        # ▼▼▼ 修正箇所: データがない場合に空行を追加 ▼▼▼
+        if display_df.empty:
+            display_df = pd.DataFrame([{"検索条件": None, "キーワード": None}])
+        else:
             display_df = display_df.reset_index(drop=True)
+        # ▲▲▲ 修正箇所 ▲▲▲
 
         if current_plan_id.startswith(PLANS["full"]["base_id"]) or current_plan_id == PLANS["full"]["opt_id"]:
              st.info("💎 **フルプラン契約中**")
@@ -841,7 +845,7 @@ def main():
             use_container_width=True, 
             hide_index=True,
             column_config={
-                "_index": None,
+                # ▼▼▼ 修正箇所: "_index": None を削除 ▼▼▼
                 "検索条件": st.column_config.SelectboxColumn(
                     options=allowed_opts, 
                     required=True
