@@ -43,16 +43,16 @@ PLANS = {
         "desc": "アパレル・その他の全てのカテゴリを選択可能",
         "type": "all",
         "base_price": 9000,
-        "base_id": "price_1T0D0LRp7tXAl48PFa7JBztW",            # フルプラン単体
-        "opt_id": "price_1T0D1yRp7tXAl48P0ep6L76Y"             # フルプラン+OP
+        "base_id": "price_1T0D0LRp7tXAl48PFa7JBztW",             # フルプラン単体
+        "opt_id": "price_1T0D1yRp7tXAl48P0ep6L76Y"              # フルプラン+OP
     },
     "light": {
         "name": "ライトプラン (片方のみ)",
         "desc": "「アパレル」または「それ以外」のどちらか一方のみ選択可能",
         "type": "select",
         "base_price": 5000,
-        "base_id": "price_1T0CetRp7tXAl48PCcvLKVJ6",           # ライトプラン単体
-        "opt_id": "price_1T0CjERp7tXAl48PLckXXhG4"            # ライトプラン+OP
+        "base_id": "price_1T0CetRp7tXAl48PCcvLKVJ6",            # ライトプラン単体
+        "opt_id": "price_1T0CjERp7tXAl48PLckXXhG4"             # ライトプラン+OP
     }
 }
 
@@ -120,19 +120,29 @@ def get_gspread_client():
         return None
     return None
 
+# ==========================================
+#   特定商取引法に基づく表記 (更新済み)
+# ==========================================
 def show_tokushoho():
     st.markdown("---")
     with st.expander("⚖️ 特定商取引法に基づく表記", expanded=True):
         st.markdown("""
+        ### 特定商取引法に基づく表記
+
         | 項目 | 内容 |
         | :--- | :--- |
         | **販売業者** | 齋藤 航太 |
-        | **代表責任者** | 齋藤 航太 |
+        | **屋号 (ショップ名)** | revolt shop |
+        | **運営統括責任者** | 齋藤 航太 |
         | **所在地** | 〒156-0055 東京都世田谷区船橋2-8-1 |
-        | **電話番号** | 080-3423-1798 |
+        | **電話番号** | 080-3423-1798<br>※受付時間 10:00-18:00 (土日祝を除く)<br>※お電話でのサポートは受け付けておりません。お問い合わせはメールにてお願いいたします。 |
         | **メールアドレス** | koutaiwi@gmail.com |
-        | **販売価格** | 本ページ上部の「料金プラン」に記載 |
-        | **支払方法** | クレジットカード決済 (Stripe) |
+        | **販売価格** | 本ページ上部の「料金プラン」および決済ページに記載 |
+        | **商品代金以外の必要料金** | サイト閲覧・コンテンツダウンロード・お問い合わせ等の際の電子通信料 |
+        | **お支払方法** | クレジットカード決済 (Stripe) |
+        | **お支払時期** | **<クレジットカード>**<br>ご利用のクレジットカード会社の締め日や契約内容により異なります。ご利用されるカード会社までお問い合わせください。 |
+        | **商品の引渡時期** | クレジットカード決済完了後、直ちにご利用いただけます。 |
+        | **交換および返品・解約** | **<お客様都合の返品・交換>**<br>デジタルコンテンツの性質上、決済完了後の返品・キャンセル・返金はお受けしておりません。<br>あらかじめ利用環境・対応機種をよくお確かめの上、お申込み願います。<br><br>**<不良品・瑕疵への対応>**<br>本ツールに隠れた瑕疵（バグ等）がある場合は、速やかに修正等の対応を行います。メールにてご連絡ください。<br><br>**<解約について>**<br>マイページ上の「プラン解約」ボタンよりいつでも解約可能です。次回更新日の前日までに解約手続きを行っていただければ、次回以降の請求は発生しません。途中解約による日割返金は行いません。 |
         """)
 
 # ==========================================
@@ -203,7 +213,6 @@ def cancel_stripe_subscription_at_period_end(subscription_id):
         end_date = datetime.fromtimestamp(current_period_end)
         return True, end_date.strftime('%Y/%m/%d')
     except Exception as e:
-        # ▼修正: Stripe側に契約がない場合（手動削除など）は、すでに解約されたものとして扱う
         if "No such subscription" in str(e):
             return True, "ALREADY_CANCELED"
         return False, str(e)
@@ -215,7 +224,6 @@ def change_stripe_subscription_plan(subscription_id, new_price_id):
         stripe.Subscription.modify(subscription_id, items=[{'id': item_id, 'price': new_price_id}])
         return True, "プランを変更しました"
     except Exception as e:
-        # ▼修正: Stripe側に契約がない場合
         if "No such subscription" in str(e):
             return False, "Stripe上に有効な契約が見つかりません。一度解約ボタンを押してシステムをリセットし、再度契約してください。"
         return False, str(e)
@@ -804,7 +812,6 @@ def main():
                     suc, msg = cancel_stripe_subscription_at_period_end(sub_id)
                     
                     if suc:
-                        # ▼修正: Stripe上に存在しなかった場合は即時解約扱いにしてシステムをリセット
                         if msg == "ALREADY_CANCELED":
                             now_str = datetime.now(timezone(timedelta(hours=9))).strftime('%Y/%m/%d')
                             update_user_stripe_data(client, uid, subscription_id="", valid_until=now_str)
