@@ -121,107 +121,86 @@ def get_gspread_client():
     return None
 
 # ==========================================
-#   特定商取引法に基づく表記 (HTML修正版)
+#   特定商取引法に基づく表記 (修正版)
 # ==========================================
 def show_tokushoho():
     st.markdown("---")
     with st.expander("⚖️ 特定商取引法に基づく表記", expanded=True):
-        # 記号を【 】に変更して表示崩れを防止
+        # HTMLのインデントを削除（左詰め）にすることでコードブロック化を回避
         html_content = """
-        <style>
-            .tokushoho-table {
-                width: 100%;
-                border-collapse: collapse;
-                margin-bottom: 20px;
-            }
-            .tokushoho-table th, .tokushoho-table td {
-                border: 1px solid #ddd;
-                padding: 12px;
-                text-align: left;
-                vertical-align: top;
-                font-size: 14px;
-            }
-            .tokushoho-table th {
-                background-color: #f9f9f9;
-                width: 30%;
-                font-weight: bold;
-                color: #333;
-            }
-            .tokushoho-table small {
-                color: #666;
-                display: block;
-                margin-top: 4px;
-            }
-        </style>
-        
-        <table class="tokushoho-table">
-            <tr>
-                <th>販売業者</th>
-                <td>齋藤 航太</td>
-            </tr>
-            <tr>
-                <th>屋号 (ショップ名)</th>
-                <td>revolt shop</td>
-            </tr>
-            <tr>
-                <th>運営統括責任者</th>
-                <td>齋藤 航太</td>
-            </tr>
-            <tr>
-                <th>所在地</th>
-                <td>〒156-0055 東京都世田谷区船橋2-8-1</td>
-            </tr>
-            <tr>
-                <th>電話番号</th>
-                <td>
-                    080-3423-1798<br>
-                    <small>※受付時間 10:00-18:00 (土日祝を除く)<br>
-                    ※お電話でのサポートは受け付けておりません。お問い合わせはメールにてお願いいたします。</small>
-                </td>
-            </tr>
-            <tr>
-                <th>メールアドレス</th>
-                <td>koutaiwi@gmail.com</td>
-            </tr>
-            <tr>
-                <th>販売価格</th>
-                <td>本ページ上部の「料金プラン」および決済ページに記載</td>
-            </tr>
-            <tr>
-                <th>商品代金以外の必要料金</th>
-                <td>サイト閲覧・コンテンツダウンロード・お問い合わせ等の際の電子通信料</td>
-            </tr>
-            <tr>
-                <th>お支払方法</th>
-                <td>クレジットカード決済 (Stripe)</td>
-            </tr>
-            <tr>
-                <th>お支払時期</th>
-                <td>
-                    <b>【クレジットカード】</b><br>
-                    ご利用のクレジットカード会社の締め日や契約内容により異なります。ご利用されるカード会社までお問い合わせください。
-                </td>
-            </tr>
-            <tr>
-                <th>商品の引渡時期</th>
-                <td>クレジットカード決済完了後、直ちにご利用いただけます。</td>
-            </tr>
-            <tr>
-                <th>交換および返品・解約</th>
-                <td>
-                    <b>【お客様都合の返品・交換】</b><br>
-                    デジタルコンテンツの性質上、決済完了後の返品・キャンセル・返金はお受けしておりません。<br>
-                    あらかじめ利用環境・対応機種をよくお確かめの上、お申込み願います。<br><br>
-                    
-                    <b>【不良品・瑕疵への対応】</b><br>
-                    本ツールに隠れた瑕疵（バグ等）がある場合は、速やかに修正等の対応を行います。メールにてご連絡ください。<br><br>
-                    
-                    <b>【解約について】</b><br>
-                    マイページ上の「プラン解約」ボタンよりいつでも解約可能です。次回更新日の前日までに解約手続きを行っていただければ、次回以降の請求は発生しません。途中解約による日割返金は行いません。
-                </td>
-            </tr>
-        </table>
-        """
+<style>
+.tokushoho-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+.tokushoho-table th, .tokushoho-table td { border: 1px solid #ddd; padding: 12px; text-align: left; vertical-align: top; font-size: 14px; }
+.tokushoho-table th { background-color: #f9f9f9; width: 30%; font-weight: bold; color: #333; }
+.tokushoho-table small { color: #666; display: block; margin-top: 4px; }
+</style>
+
+<table class="tokushoho-table">
+<tr>
+<th>販売業者</th>
+<td>齋藤 航太</td>
+</tr>
+<tr>
+<th>屋号 (ショップ名)</th>
+<td>revolt shop</td>
+</tr>
+<tr>
+<th>運営統括責任者</th>
+<td>齋藤 航太</td>
+</tr>
+<tr>
+<th>所在地</th>
+<td>〒156-0055 東京都世田谷区船橋2-8-1</td>
+</tr>
+<tr>
+<th>電話番号</th>
+<td>
+080-3423-1798<br>
+<small>※受付時間 10:00-18:00 (土日祝を除く)<br>
+※お電話でのサポートは受け付けておりません。お問い合わせはメールにてお願いいたします。</small>
+</td>
+</tr>
+<tr>
+<th>メールアドレス</th>
+<td>koutaiwi@gmail.com</td>
+</tr>
+<tr>
+<th>販売価格</th>
+<td>本ページ上部の「料金プラン」および決済ページに記載</td>
+</tr>
+<tr>
+<th>商品代金以外の必要料金</th>
+<td>サイト閲覧・コンテンツダウンロード・お問い合わせ等の際の電子通信料</td>
+</tr>
+<tr>
+<th>お支払方法</th>
+<td>クレジットカード決済 (Stripe)</td>
+</tr>
+<tr>
+<th>お支払時期</th>
+<td>
+<b>【クレジットカード】</b><br>
+ご利用のクレジットカード会社の締め日や契約内容により異なります。ご利用されるカード会社までお問い合わせください。
+</td>
+</tr>
+<tr>
+<th>商品の引渡時期</th>
+<td>クレジットカード決済完了後、直ちにご利用いただけます。</td>
+</tr>
+<tr>
+<th>交換および返品・解約</th>
+<td>
+<b>【お客様都合の返品・交換】</b><br>
+デジタルコンテンツの性質上、決済完了後の返品・キャンセル・返金はお受けしておりません。<br>
+あらかじめ利用環境・対応機種をよくお確かめの上、お申込み願います。<br><br>
+<b>【不良品・瑕疵への対応】</b><br>
+本ツールに隠れた瑕疵（バグ等）がある場合は、速やかに修正等の対応を行います。メールにてご連絡ください。<br><br>
+<b>【解約について】</b><br>
+マイページ上の「プラン解約」ボタンよりいつでも解約可能です。次回更新日の前日までに解約手続きを行っていただければ、次回以降の請求は発生しません。途中解約による日割返金は行いません。
+</td>
+</tr>
+</table>
+"""
         st.markdown(html_content, unsafe_allow_html=True)
 
 # ==========================================
