@@ -273,7 +273,7 @@ def get_allowed_options(client, restriction_type):
             allowed.append(combo)
     return sorted(list(set(allowed)))
 
-# ★ UI用: カンマ区切りのDB文字列を行×列のデータフレームに展開
+# ★ 修正: カンマ区切りの文字列を、横の列（OR条件）に動的に展開
 def expand_keywords_to_dataframe(user_df):
     max_cols = st.session_state.get('kw_col_count', 3)
     expanded_rows = []
@@ -286,17 +286,19 @@ def expand_keywords_to_dataframe(user_df):
             expanded_rows.append({'検索条件': combo})
             continue
             
-        or_groups = [g.strip() for g in kw_str.replace('、', ',').split(',')]
-        for group in or_groups:
-            if not group: continue
-            and_items = [item.strip() for item in group.replace('　', ' ').split(' ') if item.strip()]
+        # カンマ区切りでOR条件のリストを取得
+        or_items = [g.strip() for g in kw_str.replace('、', ',').split(',') if g.strip()]
+        
+        # 既存データが現在の列数より多ければ、自動で列数を増やす
+        if len(or_items) > max_cols:
+            max_cols = len(or_items)
             
-            if len(and_items) > max_cols: max_cols = len(and_items)
-                
-            new_row = {'検索条件': combo}
-            for i in range(len(and_items)):
-                new_row[f'キーワード{i+1}'] = and_items[i]
-            expanded_rows.append(new_row)
+        new_row = {'検索条件': combo}
+        # 横の列に順番に割り当てる
+        for i in range(len(or_items)):
+            new_row[f'キーワード{i+1}'] = or_items[i]
+            
+        expanded_rows.append(new_row)
             
     st.session_state['kw_col_count'] = max_cols
     
@@ -311,7 +313,7 @@ def expand_keywords_to_dataframe(user_df):
     cols = ['検索条件'] + [f'キーワード{i+1}' for i in range(max_cols)]
     return df[cols]
 
-# ★ 保存用: UIの行×列DFをカンマとスペース区切りのDB文字列に圧縮して保存
+# ★ 修正: UIの各列をカンマで繋いで保存
 def save_merged_data(client, full_df, edited_df, user_id, restriction_type):
     try:
         allowed_opts = get_allowed_options(client, restriction_type)
@@ -324,27 +326,33 @@ def save_merged_data(client, full_df, edited_df, user_id, restriction_type):
                 st.error(f"保存失敗: 「{combo}」は現在のプラン設定では選択できません。")
                 return None
                 
-            and_items = []
+            or_items = []
             for i in range(st.session_state['kw_col_count']):
                 val = str(row.get(f'キーワード{i+1}', '')).strip()
                 if val and val.lower() not in ["none", "nan"]:
-                    # DBフォーマット崩れ防止のため、単語内のスペースとカンマを除去
-                    clean_val = val.replace(' ', '').replace('　', '').replace(',', '').replace('、', '')
-                    if clean_val: and_items.append(clean_val)
+                    # DBフォーマット上、カンマは枠の区切り(OR)として使うため、枠内のカンマはスペース(AND)に置換
+                    clean_val = val.replace(',', ' ').replace('、', ' ')
+                    # 連続するスペースを1つに整形
+                    clean_val = ' '.join(clean_val.split())
+                    if clean_val: or_items.append(clean_val)
             
-            if and_items:
-                and_str = ' '.join(and_items)
+            if or_items:
+                or_str = ', '.join(or_items)
                 if combo not in result_dict: result_dict[combo] = []
-                if and_str not in result_dict[combo]: result_dict[combo].append(and_str)
+                result_dict[combo].append(or_str)
             else:
                 if combo not in result_dict: result_dict[combo] = []
                 
         new_rows = []
-        for combo, and_lists in result_dict.items():
-            if len(and_lists) > 30:
-                st.error(f"エラー: 「{combo}」の行数が多すぎます（最大30行まで）")
+        for combo, or_lists in result_dict.items():
+            # 複数行に同じ検索条件があった場合、それらもまとめてカンマで繋ぐ
+            combined_or_list = [item for sublist in or_lists for item in sublist.split(', ')]
+            
+            if len(combined_or_list) > 30:
+                st.error(f"エラー: 「{combo}」のキーワード枠が多すぎます（最大30枠まで）")
                 return None
-            kw_str = ', '.join(and_lists)
+                
+            kw_str = ', '.join(combined_or_list)
             new_rows.append({'ユーザーID': str(user_id), '検索条件': combo, 'キーワード': kw_str})
             
         save_user_df = pd.DataFrame(new_rows)
@@ -436,7 +444,7 @@ def main():
 
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
         
-        # UIの列数を管理
+        # UIの列数を管理 (既存のデータに応じて自動で増えます)
         if 'kw_col_count' not in st.session_state:
             st.session_state['kw_col_count'] = 3
             
@@ -446,8 +454,9 @@ def main():
             st.success("✅ **キーワード通知オプション: 有効**")
             st.info("""
             💡 **キーワード設定のコツ**
-            * **同じ行**の枠に単語を入れると **「かつ (AND)」** になります。（例：キーワード1「ナイキ」, キーワード2「黒」）
-            * 表の **行を追加** して同じ条件を選ぶと **「または (OR)」** になります。
+            * **別の枠（横の列）** に単語を入れると **「または (OR)」** になります。
+            * **同じ枠の中** にスペースを空けて単語を入れると **「かつ (AND)」** になります。
+            （例：キーワード1に「ナイキ 黒」、キーワード2に「アディダス」と入れると、「ナイキの黒」または「アディダス」が通知されます）
             """)
             if st.button("➕ キーワード枠の列を追加する"):
                 st.session_state['kw_col_count'] += 1
