@@ -10,6 +10,7 @@ import pyotp
 import qrcode
 import io
 import stripe
+import re  # ★ 正規表現モジュールを追加
 from PIL import Image
 from datetime import datetime, timedelta, timezone
 from google_auth_oauthlib.flow import Flow
@@ -44,15 +45,15 @@ PLANS = {
         "type": "all",
         "base_price": 9000,
         "base_id": "price_1T0D0LRp7tXAl48PFa7JBztW",             # フルプラン単体
-        "opt_id": "price_1T0D1yRp7tXAl48P0ep6L76Y"              # フルプラン+OP
+        "opt_id": "price_1T0D1yRp7tXAl48P0ep6L76Y"               # フルプラン+OP
     },
     "light": {
         "name": "ライトプラン (片方のみ)",
         "desc": "「アパレル」または「それ以外」のどちらか一方のみ選択可能",
         "type": "select",
         "base_price": 5000,
-        "base_id": "price_1T0CetRp7tXAl48PCcvLKVJ6",            # ライトプラン単体
-        "opt_id": "price_1T0CjERp7tXAl48PLckXXhG4"             # ライトプラン+OP
+        "base_id": "price_1T0CetRp7tXAl48PCcvLKVJ6",             # ライトプラン単体
+        "opt_id": "price_1T0CjERp7tXAl48PLckXXhG4"              # ライトプラン+OP
     }
 }
 
@@ -536,11 +537,31 @@ def get_allowed_options(client, restriction_type):
             
     return sorted(list(set(allowed)))
 
+# ★ 修正: カンマ区切りの単純なリストではなく、(a,b) を1つの条件としてカウントするように変更
 def validate_keywords(df):
     for index, row in df.iterrows():
-        kws = str(row['キーワード']).replace('、', ',').split(',')
-        kws = [k for k in kws if k.strip()]
-        if len(kws) > 20: return False, f"エラー: {row['検索条件']} のキーワードが多すぎます（最大20単語まで）"
+        val_str = str(row['キーワード']).replace('、', ',')
+        if not val_str.strip() or val_str.lower() in ["none", "nan"]:
+            continue
+            
+        conditions_count = 0
+        
+        # (a,b) のようなカッコで囲まれたAND条件を抽出してカウント
+        and_groups = re.findall(r'[\(（]([^)）]+)[\)）]', val_str)
+        for group in and_groups:
+            and_cond = [k.strip() for k in group.split(',') if k.strip()]
+            if and_cond:
+                conditions_count += 1
+        
+        # カッコ部分を除去して残りをOR条件としてカウント
+        rem_str = re.sub(r'[\(（][^)）]+[\)）]', '', val_str)
+        or_items = [k.strip() for k in rem_str.split(',') if k.strip()]
+        conditions_count += len(or_items)
+        
+        # 上限を30条件に変更
+        if conditions_count > 30: 
+            return False, f"エラー: {row['検索条件']} のキーワード条件が多すぎます（最大30条件まで）"
+            
     return True, ""
 
 def save_merged_data(client, full_df, edited_display_df, user_id, restriction_type):
@@ -784,7 +805,8 @@ def main():
 
         if has_option:
             st.success("✅ **キーワード通知オプション: 有効**")
-            st.caption("商品名、ブランド、型番のいずれかに設定したキーワード（最大20単語）が含まれる商品のみを通知します。")
+            # ★ 修正: オプションの説明文を変更
+            st.caption("カンマ(,)区切りでOR検索。(A,B)のようにカッコで囲むとAND検索。最大30条件まで指定可能です。")
         else:
             st.warning("🔒 **キーワード通知オプション: 無効**")
             st.caption("現在、キーワードによる絞り込み機能は利用できません。ご希望の場合はプラン契約画面からオプションを追加してください。")
@@ -806,10 +828,11 @@ def main():
                     "検索条件",
                     options=allowed_opts
                 ),
+                # ★ 修正: カラムの説明文とヘルプテキストを変更
                 "キーワード": st.column_config.TextColumn(
-                    "キーワード (最大20個)",
+                    "キーワード (最大30個)",
                     disabled=(not has_option),
-                    help="カンマ(,)区切りで入力。商品名・ブランド・型番のいずれかに一致したら通知。"
+                    help="カンマ(,)区切りでOR検索。 (A,B) のようにカッコで囲むとAND検索になります。"
                 )
             }
         )
