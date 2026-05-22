@@ -35,11 +35,11 @@ OPTION_PRICE = 2000
 PLANS = {
     "full": {
         "name": "フルプラン (全て)", "desc": "アパレル・その他の全てのカテゴリを選択可能", "type": "all",
-        "base_price": 9000, "base_id": "price_1T0D0LRp7tXAl48PFa7JBztW", "opt_id": "price_1T0D1yRp7tXAl48P0ep6L76Y"
+        "base_price": 9000, "base_id": "price_1TZw2rRuq87ZH1shVVdNkhXn", "opt_id": "price_1TZw26Ruq87ZH1shxQJwa4OA"
     },
     "light": {
         "name": "ライトプラン (片方のみ)", "desc": "「アパレル」または「それ以外」のどちらか一方のみ選択可能", "type": "select",
-        "base_price": 5000, "base_id": "price_1T0CetRp7tXAl48PCcvLKVJ6", "opt_id": "price_1T0CjERp7tXAl48PLckXXhG4"
+        "base_price": 5000, "base_id": "price_1TZw5qRuq87ZH1shCHiJxTif", "opt_id": "price_1TZw3tRuq87ZH1shTbNIco8T"
     }
 }
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
@@ -111,7 +111,7 @@ def create_discord_channel_and_webhook(user_discord_id, user_name):
     headers = {"Authorization": f"Bot {DISCORD_BOT_TOKEN}", "Content-Type": "application/json"}
     url_create = f"https://discord.com/api/v10/guilds/{DISCORD_GUILD_ID}/channels"
     payload = {
-        "name": f"通知-{user_name}", "type": 0,
+        "name": f"通知-{user_discord_id}", "type": 0,
         "permission_overwrites": [
             {"id": DISCORD_GUILD_ID, "type": 0, "deny": "1024"},
             {"id": user_discord_id, "type": 1, "allow": "1024"}
