@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ツウチマネージャー 設定マニュアル</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+      background: #f5f7fa;
+      color: #2d3748;
+      line-height: 1.8;
+    }
+    header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 60%, #0f3460 100%);
+      color: white;
+      padding: 48px 24px 40px;
+      text-align: center;
+    }
+    header h1 { font-size: 2rem; font-weight: 700; margin-bottom: 8px; }
+    header p { font-size: 1rem; color: #a0aec0; }
+    .badge {
+      display: inline-block;
+      background: #5865f2;
+      color: white;
+      font-size: 0.75rem;
+      padding: 4px 12px;
+      border-radius: 20px;
+      margin-top: 12px;
+    }
+    nav {
+      background: white;
+      border-bottom: 1px solid #e2e8f0;
+      padding: 12px 24px;
+      text-align: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 1px 4px rgba(0,0,0,.06);
+    }
+    nav a {
+      display: inline-block;
+      margin: 4px 10px;
+      color: #4a5568;
+      text-decoration: none;
+      font-size: 0.88rem;
+      font-weight: 500;
+    }
+    nav a:hover { color: #5865f2; }
+    main { max-width: 860px; margin: 0 auto; padding: 40px 20px 80px; }
+    .step-card {
+      background: white;
+      border-radius: 16px;
+      padding: 36px 40px;
+      margin-bottom: 32px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.06);
+      border: 1px solid #e2e8f0;
+    }
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    .step-num {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #5865f2, #0f3460);
+      color: white;
+      font-weight: 700;
+      font-size: 1.1rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .step-header h2 { font-size: 1.25rem; font-weight: 700; color: #1a202c; }
+    .step-card p, .step-card li { color: #4a5568; font-size: 0.95rem; }
+    .step-card ol, .step-card ul {
+      padding-left: 20px;
+      margin: 12px 0;
+    }
+    .step-card li { margin-bottom: 6px; }
+    .screenshot {
+      width: 100%;
+      max-width: 700px;
+      border-radius: 12px;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 4px 20px rgba(0,0,0,.1);
+      display: block;
+      margin: 20px auto;
+    }
+    .info-box {
+      background: #ebf4ff;
+      border-left: 4px solid #5865f2;
+      border-radius: 0 8px 8px 0;
+      padding: 14px 18px;
+      margin: 16px 0;
+      font-size: 0.9rem;
+      color: #2c5282;
+    }
+    .warn-box {
+      background: #fffbeb;
+      border-left: 4px solid #f6ad55;
+      border-radius: 0 8px 8px 0;
+      padding: 14px 18px;
+      margin: 16px 0;
+      font-size: 0.9rem;
+      color: #744210;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 18px 0;
+      font-size: 0.9rem;
+    }
+    th {
+      background: #f7fafc;
+      border: 1px solid #e2e8f0;
+      padding: 10px 14px;
+      text-align: left;
+      font-weight: 600;
+      color: #2d3748;
+    }
+    td {
+      border: 1px solid #e2e8f0;
+      padding: 10px 14px;
+      color: #4a5568;
+    }
+    tr:hover td { background: #f7fafc; }
+    .price-badge {
+      display: inline-block;
+      background: #e9d8fd;
+      color: #553c9a;
+      font-weight: 700;
+      padding: 2px 10px;
+      border-radius: 20px;
+      font-size: 0.9rem;
+    }
+    .keyword-demo {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 16px 0;
+    }
+    .kw-box {
+      background: #f7fafc;
+      border: 2px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 14px;
+      font-size: 0.88rem;
+    }
+    .kw-box .label {
+      font-size: 0.75rem;
+      color: #718096;
+      margin-bottom: 6px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    .kw-box .tag {
+      display: inline-block;
+      background: white;
+      border: 1px solid #c3dafe;
+      color: #3b82f6;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 0.92rem;
+    }
+    .menu-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin: 16px 0;
+    }
+    .menu-item {
+      background: #f7fafc;
+      border-radius: 10px;
+      padding: 16px;
+      text-align: center;
+      border: 1px solid #e2e8f0;
+    }
+    .menu-item .icon { font-size: 1.6rem; margin-bottom: 6px; }
+    .menu-item .name { font-weight: 700; font-size: 0.9rem; color: #2d3748; }
+    .menu-item .desc { font-size: 0.78rem; color: #718096; margin-top: 4px; }
+    .faq-item { margin-bottom: 20px; }
+    .faq-item .q { font-weight: 700; color: #2d3748; margin-bottom: 6px; }
+    .faq-item .q::before { content: "Q. "; color: #5865f2; }
+    .faq-item .a { color: #4a5568; font-size: 0.92rem; }
+    .faq-item .a::before { content: "A. "; color: #48bb78; font-weight: 700; }
+    footer {
+      text-align: center;
+      padding: 32px;
+      font-size: 0.82rem;
+      color: #a0aec0;
+      border-top: 1px solid #e2e8f0;
+    }
+    @media (max-width: 600px) {
+      header h1 { font-size: 1.4rem; }
+      .step-card { padding: 24px 20px; }
+      .keyword-demo { grid-template-columns: 1fr; }
+      .menu-grid { grid-template-columns: 1fr; }
+      nav a { font-size: 0.8rem; margin: 2px 6px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>📊 ツウチマネージャー</h1>
+  <p>市場リサーチツール — 設定マニュアル</p>
+  <div class="badge">🔔 Discordへリアルタイム通知</div>
+</header>
+
+<nav>
+  <a href="#step1">① Discord ID確認</a>
+  <a href="#step2">② アカウント登録</a>
+  <a href="#step3">③ ログイン</a>
+  <a href="#step4">④ プラン契約</a>
+  <a href="#step5">⑤ 通知設定</a>
+  <a href="#faq">よくある質問</a>
+</nav>
+
+<main>
+
+  <!-- STEP 1 -->
+  <section class="step-card" id="step1">
+    <div class="step-header">
+      <div class="step-num">1</div>
+      <h2>事前準備：Discord IDの確認</h2>
+    </div>
+    <p>登録にはご自身の <strong>Discord ユーザーID（数字のみ）</strong> が必要です。</p>
+    <div class="info-box">
+      Discord IDは <strong>123456789012345678</strong> のような18桁の数字です。
+    </div>
+    <p><strong>取得手順：</strong></p>
+    <ol>
+      <li>Discordアプリを開く</li>
+      <li>設定 →「詳細設定」→「<strong>開発者モード</strong>」をオンにする</li>
+      <li>ご自身のプロフィールを右クリック →「<strong>IDをコピー</strong>」</li>
+    </ol>
+  </section>
+
+  <!-- STEP 2 -->
+  <section class="step-card" id="step2">
+    <div class="step-header">
+      <div class="step-num">2</div>
+      <h2>アカウント登録</h2>
+    </div>
+    <p>ツールのURLにアクセスし、「<strong>✨ 新規登録</strong>」タブをクリックします。</p>
+    <img src="images/01.png" alt="新規登録タブの選択" class="screenshot">
+    <p>「新規登録」タブをクリックすると以下のフォームが表示されます。</p>
+    <img src="images/02.png" alt="新規登録フォーム" class="screenshot">
+    <table>
+      <tr><th>項目</th><th>入力内容</th></tr>
+      <tr><td><strong>Discord ID</strong></td><td>手順1で確認した18桁の数字</td></tr>
+      <tr><td><strong>表示名</strong></td><td>ツール内で使う任意のお名前</td></tr>
+      <tr><td><strong>パスワード</strong></td><td>任意のパスワード（6文字以上推奨）</td></tr>
+    </table>
+    <p>入力後「<strong>登録</strong>」ボタンを押してください。登録が完了すると Discordサーバーに専用の通知チャンネルが自動で作成されます。</p>
+  </section>
+
+  <!-- STEP 3 -->
+  <section class="step-card" id="step3">
+    <div class="step-header">
+      <div class="step-num">3</div>
+      <h2>ログイン</h2>
+    </div>
+    <p>「<strong>🔑 ログイン</strong>」タブで登録した情報を入力してログインします。</p>
+    <img src="images/03.png" alt="ログイン画面" class="screenshot">
+    <table>
+      <tr><th>項目</th><th>入力内容</th></tr>
+      <tr><td><strong>ID / 名前</strong></td><td>登録時のDiscord IDまたは表示名</td></tr>
+      <tr><td><strong>パスワード</strong></td><td>登録時のパスワード</td></tr>
+    </table>
+    <p>「<strong>ログイン</strong>」ボタンを押すとダッシュボードに移動します。</p>
+  </section>
+
+  <!-- STEP 4 -->
+  <section class="step-card" id="step4">
+    <div class="step-header">
+      <div class="step-num">4</div>
+      <h2>プランの契約</h2>
+    </div>
+    <p>ログイン後、左側のサイドバーから「<strong>プラン契約・解約</strong>」を選択します。</p>
+    <img src="images/04.png" alt="サイドバーメニュー" class="screenshot">
+    <p><strong>プラン一覧</strong></p>
+    <table>
+      <tr><th>プラン</th><th>月額</th><th>対象カテゴリ</th></tr>
+      <tr>
+        <td><strong>フルプラン（全て）</strong></td>
+        <td><span class="price-badge">¥9,000/月</span></td>
+        <td>アパレル・その他 全カテゴリ</td>
+      </tr>
+      <tr>
+        <td><strong>ライトプラン（片方のみ）</strong></td>
+        <td><span class="price-badge">¥5,000/月</span></td>
+        <td>アパレル または その他 どちらか一方</td>
+      </tr>
+    </table>
+    <p><strong>オプション</strong></p>
+    <table>
+      <tr><th>オプション</th><th>追加料金</th><th>内容</th></tr>
+      <tr>
+        <td>キーワード通知オプション</td>
+        <td><span class="price-badge">+¥2,000/月</span></td>
+        <td>キーワードで絞り込んだ商品のみ通知</td>
+      </tr>
+    </table>
+    <div class="warn-box">
+      ※ キーワードオプションなしの場合、選択したカテゴリの全商品が通知されます。
+    </div>
+    <p>プランとオプションを選択後、「<strong>お支払い画面へ進む</strong>」をクリックしてStripeの決済ページで支払いを完了してください。</p>
+  </section>
+
+  <!-- STEP 5 -->
+  <section class="step-card" id="step5">
+    <div class="step-header">
+      <div class="step-num">5</div>
+      <h2>通知条件の設定</h2>
+    </div>
+    <p>契約完了後、サイドバーの「<strong>通知設定</strong>」メニューから通知条件を設定します。</p>
+    <img src="images/05.png" alt="通知条件の設定画面" class="screenshot">
+    <p><strong>検索条件の追加手順：</strong></p>
+    <ol>
+      <li>テーブル左端の「<strong>検索条件</strong>」列をクリック</li>
+      <li>ドロップダウンから通知を受け取りたいサイト・カテゴリを選択</li>
+      <li>（オプション契約者のみ）キーワード列にフィルタワードを入力</li>
+      <li>「<strong>設定を保存</strong>」ボタンで保存</li>
+    </ol>
+
+    <p style="margin-top:24px;"><strong>キーワードの入力ルール（オプション契約者向け）</strong></p>
+    <div class="keyword-demo">
+      <div class="kw-box">
+        <div class="label">AND条件（〇〇かつ△△）</div>
+        <p style="margin-bottom:8px;font-size:.85rem;">同じ枠内にスペースで区切って入力</p>
+        <span class="tag">ナイキ 黒</span>
+      </div>
+      <div class="kw-box">
+        <div class="label">OR条件（〇〇または△△）</div>
+        <p style="margin-bottom:8px;font-size:.85rem;">別の枠（横の列）に入力</p>
+        <span class="tag">ナイキ</span> &nbsp; <span class="tag">アディダス</span>
+      </div>
+    </div>
+    <div class="info-box">
+      例：キーワード1に「ナイキ 黒」、キーワード2に「アディダス」と入れると、「ナイキの黒い商品」または「アディダスの商品」が通知されます。
+    </div>
+    <p>枠を増やしたい場合は「<strong>➕ キーワード枠の列を追加する</strong>」ボタンを押してください（最大30枠）。</p>
+  </section>
+
+  <!-- MENU -->
+  <section class="step-card">
+    <div class="step-header">
+      <div class="step-num" style="background:linear-gradient(135deg,#48bb78,#276749);">≡</div>
+      <h2>メニュー一覧</h2>
+    </div>
+    <div class="menu-grid">
+      <div class="menu-item">
+        <div class="icon">📢</div>
+        <div class="name">通知設定</div>
+        <div class="desc">サイト・カテゴリ・キーワードの管理</div>
+      </div>
+      <div class="menu-item">
+        <div class="icon">💳</div>
+        <div class="name">プラン契約・解約</div>
+        <div class="desc">サブスクリプションの契約と解約</div>
+      </div>
+      <div class="menu-item">
+        <div class="icon">⚙️</div>
+        <div class="name">アカウント設定</div>
+        <div class="desc">アカウント情報の変更</div>
+      </div>
+    </div>
+    <p style="font-size:.88rem;color:#718096;margin-top:8px;">ログアウトはサイドバー下部の「ログアウト」ボタンから行えます。</p>
+  </section>
+
+  <!-- FAQ -->
+  <section class="step-card" id="faq">
+    <div class="step-header">
+      <div class="step-num" style="background:linear-gradient(135deg,#ed8936,#c05621);">?</div>
+      <h2>よくある質問</h2>
+    </div>
+    <div class="faq-item">
+      <div class="q">Discordに通知チャンネルが届かない</div>
+      <div class="a">対象のDiscordサーバーに参加しているか確認してください。サーバー参加後に登録を行ってください。</div>
+    </div>
+    <div class="faq-item">
+      <div class="q">解約したい</div>
+      <div class="a">「プラン契約・解約」メニューの「プランを解約する」から手続きできます。解約後も契約期間終了まで利用可能です。</div>
+    </div>
+    <div class="faq-item">
+      <div class="q">キーワードを設定したのに通知が来ない</div>
+      <div class="a">「キーワード通知オプション」の契約状況を確認してください。未契約の場合はキーワード列がグレーアウトして入力できません。</div>
+    </div>
+    <div class="faq-item">
+      <div class="q">ログインできない</div>
+      <div class="a">Discord IDまたは表示名のどちらでもログインできます。パスワードをお忘れの場合はサポートまでお問い合わせください。</div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  運営：revolt shop &nbsp;|&nbsp; お問い合わせ：koutaiwi@gmail.com
+</footer>
+
+</body>
+</html>
