@@ -380,7 +380,8 @@ def main():
     if "session_id" in st.query_params:
         session = get_stripe_session_details(st.query_params["session_id"])
         if session and session.payment_status == 'paid':
-            target_uid = session.metadata.get('user_id')
+            metadata = getattr(session, 'metadata', None) or {}
+            target_uid = metadata.get('user_id') if isinstance(metadata, dict) else getattr(metadata, 'user_id', None)
             if target_uid:
                 saved_restriction, saved_plan_id = get_user_temp_settings(client, target_uid)
                 update_user_stripe_data(client, target_uid, stripe_id=session.customer, subscription_id=session.subscription, plan_id=saved_plan_id, restriction_type=saved_restriction, valid_until="")
