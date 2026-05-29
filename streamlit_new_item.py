@@ -35,11 +35,13 @@ OPTION_PRICE = 2000
 PLANS = {
     "full": {
         "name": "フルプラン (全て)", "desc": "アパレル・その他の全てのカテゴリを選択可能", "type": "all",
-        "base_price": 9000, "base_id": "price_1TZw2rRuq87ZH1shVVdNkhXn", "opt_id": "price_1TZw26Ruq87ZH1shxQJwa4OA"
+        "base_price": 9000, "base_id": "price_1TZw2rRuq87ZH1shVVdNkhXn", "opt_id": "price_1TZw26Ruq87ZH1shxQJwa4OA",
+        "base_plan_id": "plan_9000", "opt_plan_id": "plan_11000"
     },
     "light": {
         "name": "ライトプラン (片方のみ)", "desc": "「アパレル」または「それ以外」のどちらか一方のみ選択可能", "type": "select",
-        "base_price": 5000, "base_id": "price_1TZw5qRuq87ZH1shCHiJxTif", "opt_id": "price_1TZw3tRuq87ZH1shTbNIco8T"
+        "base_price": 5000, "base_id": "price_1TZw5qRuq87ZH1shCHiJxTif", "opt_id": "price_1TZw3tRuq87ZH1shTbNIco8T",
+        "base_plan_id": "plan_5000", "opt_plan_id": "plan_7000"
     }
 }
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
@@ -430,7 +432,7 @@ def main():
 
     has_active_sub = (sub_id != "" and sub_id.lower() not in ["nan", "none"])
     is_access_allowed = has_active_sub or is_period_active
-    has_option = (current_plan_id in [PLANS["full"]["opt_id"], PLANS["light"]["opt_id"]])
+    has_option = current_plan_id in ["plan_11000", "plan_7000"]
 
     with st.sidebar:
         st.write(f"User: **{st.session_state.get('logged_in_user_name','')}**")
@@ -483,10 +485,16 @@ def main():
                 if suc: update_user_stripe_data(client, uid, subscription_id="", valid_until=datetime.now().strftime('%Y/%m/%d') if msg == "ALREADY_CANCELED" else msg); st.rerun()
         else:
             plan_key = st.radio("プラン選択", ["full", "light"], format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['base_price']:,}/月")
+            if plan_key == "light":
+                light_restriction = st.radio("通知対象カテゴリ", ["apparel", "not_apparel"], format_func=lambda x: "アパレル" if x == "apparel" else "その他")
+            else:
+                light_restriction = "all"
             use_option = st.checkbox(f"✨ キーワード通知オプションを追加 (+¥{OPTION_PRICE:,})")
-            target_plan_id = PLANS[plan_key]['opt_id'] if use_option else PLANS[plan_key]['base_id']
+            target_price_id = PLANS[plan_key]['opt_id'] if use_option else PLANS[plan_key]['base_id']
+            target_plan_str = PLANS[plan_key]['opt_plan_id'] if use_option else PLANS[plan_key]['base_plan_id']
             if st.button("お支払い画面へ進む"):
-                suc, url = create_stripe_checkout_session(uid, target_plan_id)
+                update_user_temp_settings(client, uid, light_restriction, target_plan_str)
+                suc, url = create_stripe_checkout_session(uid, target_price_id)
                 if suc: st.link_button("支払いを完了させる", url, type="primary")
 
     elif menu == "アカウント設定":
