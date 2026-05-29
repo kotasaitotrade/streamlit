@@ -5,6 +5,7 @@ import os
 import hashlib
 import json
 import time
+import uuid
 import requests
 import pyotp
 import qrcode
@@ -477,35 +478,95 @@ def main():
         if not is_access_allowed: st.error("プラン契約が必要です"); st.stop()
 
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
-        
-        # UIの列数を管理 (既存のデータに応じて自動で増えます)
-        if 'kw_col_count' not in st.session_state:
-            st.session_state['kw_col_count'] = 3
-            
-        display_df = expand_keywords_to_dataframe(user_df)
+        allowed_opts = get_allowed_options(client, restriction_type)
+
+        settings_key = f'settings_{uid}'
+        if settings_key not in st.session_state:
+            rows = []
+            for _, row in user_df.iterrows():
+                combo = str(row.get('検索条件', '')).strip()
+                kw_str = str(row.get('キーワード', '')).strip()
+                if kw_str.lower() in ['none', 'nan']: kw_str = ''
+                if combo not in allowed_opts: combo = ''
+                row_id = uuid.uuid4().hex[:8]
+                rows.append(row_id)
+                st.session_state[f'combo_{row_id}'] = combo
+                st.session_state[f'kw_{row_id}'] = kw_str
+            if not rows:
+                row_id = uuid.uuid4().hex[:8]
+                rows.append(row_id)
+                st.session_state[f'combo_{row_id}'] = ''
+                st.session_state[f'kw_{row_id}'] = ''
+            st.session_state[settings_key] = rows
+
+        current_rows = st.session_state[settings_key]
 
         if has_option:
             st.success("✅ **キーワード通知オプション: 有効**")
-            st.info("""
-            💡 **キーワード設定のコツ**
-            * **別の枠（横の列）** に単語を入れると **「または (OR)」** になります。
-            * **同じ枠の中** にスペースを空けて単語を入れると **「かつ (AND)」** になります。
-            （例：キーワード1に「ナイキ 黒」、キーワード2に「アディダス」と入れると、「ナイキの黒」または「アディダス」が通知されます）
-            """)
-            if st.button("➕ キーワード枠の列を追加する"):
-                st.session_state['kw_col_count'] += 1
-                st.rerun()
+            st.info("💡 OR条件はカンマ区切り `ナイキ 黒, アディダス`　AND条件はスペース区切り `ナイキ 黒`")
         else:
             st.warning("🔒 **キーワード通知オプション: 無効**")
 
-        column_config = {"検索条件": st.column_config.SelectboxColumn("検索条件", options=get_allowed_options(client, restriction_type))}
-        for i in range(st.session_state['kw_col_count']):
-            column_config[f"キーワード{i+1}"] = st.column_config.TextColumn(f"キーワード{i+1}", disabled=(not has_option))
+        rows_to_delete = []
+        for row_id in current_rows:
+            with st.container(border=True):
+                col1, col2 = st.columns([5, 1])
+                with col1:
+                    val = st.session_state.get(f'combo_{row_id}', '')
+                    idx = (allowed_opts.index(val) + 1) if val in allowed_opts else 0
+                    st.selectbox("検索条件", [''] + allowed_opts, index=idx, key=f'combo_{row_id}')
+                with col2:
+                    st.write("")
+                    if st.button("🗑️", key=f'del_{row_id}'):
+                        rows_to_delete.append(row_id)
+                if has_option:
+                    st.text_input("キーワード（OR: カンマ区切り / AND: スペース区切り）",
+                        key=f'kw_{row_id}',
+                        placeholder="例: ナイキ 黒, アディダス")
 
-        edited = st.data_editor(display_df, num_rows="dynamic", use_container_width=True, hide_index=True, column_config=column_config)
-        
-        if st.button("設定を保存", type="primary"):
-            save_merged_data(client, full_df, edited, uid, restriction_type)
+        if rows_to_delete:
+            for row_id in rows_to_delete:
+                current_rows.remove(row_id)
+            st.session_state[settings_key] = current_rows
+            st.rerun()
+
+        col_add, col_save = st.columns([1, 1])
+        with col_add:
+            if st.button("➕ 検索条件を追加"):
+                row_id = uuid.uuid4().hex[:8]
+                current_rows.append(row_id)
+                st.session_state[f'combo_{row_id}'] = ''
+                st.session_state[f'kw_{row_id}'] = ''
+                st.session_state[settings_key] = current_rows
+                st.rerun()
+        with col_save:
+            if st.button("💾 設定を保存", type="primary"):
+                save_ok = True
+                save_rows = []
+                for row_id in current_rows:
+                    combo = st.session_state.get(f'combo_{row_id}', '').strip()
+                    if not combo or combo in ["None", "nan", "NaN"]: continue
+                    if combo not in allowed_opts:
+                        st.error(f"保存失敗: 「{combo}」は現在のプラン設定では選択できません。"); save_ok = False; break
+                    kw_str = st.session_state.get(f'kw_{row_id}', '').strip()
+                    if kw_str.lower() in ['none', 'nan']: kw_str = ''
+                    if not has_option: kw_str = ''
+                    save_rows.append({'ユーザーID': str(uid), '検索条件': combo, 'キーワード': kw_str})
+                if save_ok:
+                    try:
+                        save_df = pd.DataFrame(save_rows) if save_rows else pd.DataFrame(columns=['ユーザーID', '検索条件', 'キーワード'])
+                        other_df = full_df[full_df['ユーザーID'] != str(uid)] if full_df is not None else pd.DataFrame(columns=['ユーザーID', '検索条件', 'キーワード'])
+                        for c in ['ユーザーID', '検索条件', 'キーワード']:
+                            if c not in save_df.columns: save_df[c] = ""
+                            if c not in other_df.columns: other_df[c] = ""
+                        final_df = pd.concat([other_df, save_df], ignore_index=True)
+                        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(TARGET_SHEET_NAME)
+                        sheet.clear()
+                        sheet.update('A1', [final_df.columns.tolist()] + final_df.astype(str).values.tolist())
+                        load_data.clear()
+                        del st.session_state[settings_key]
+                        st.success("✅ 設定保存完了")
+                    except Exception as e: st.error(f"保存エラー: {e}")
 
     elif menu == "プラン契約・解約":
         st.subheader("💳 サブスクリプション管理")
