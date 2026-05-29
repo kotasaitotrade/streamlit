@@ -316,6 +316,36 @@ def expand_keywords_to_dataframe(user_df):
     return df[cols]
 
 # ★ 修正: UIの各列をカンマで繋いで保存
+def add_initial_notification_settings(client, user_id, restriction_type):
+    """決済完了後にプランに応じた初期通知設定を追加する"""
+    try:
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(TARGET_SHEET_NAME)
+        data = sheet.get_all_values()
+        if data and len(data) > 1:
+            df = pd.DataFrame(data[1:], columns=data[0]).astype(str)
+        else:
+            df = pd.DataFrame(columns=['ユーザーID', '検索条件', 'キーワード'])
+        for c in ['ユーザーID', '検索条件', 'キーワード']:
+            if c not in df.columns: df[c] = ""
+
+        if str(user_id) in df['ユーザーID'].values:
+            return  # 既に設定あり → スキップ
+
+        new_rows = []
+        if restriction_type in ['all', 'apparel']:
+            new_rows.append({'ユーザーID': str(user_id), '検索条件': 'セカスト - バッグ', 'キーワード': ''})
+        if restriction_type in ['all', 'not_apparel']:
+            new_rows.append({'ユーザーID': str(user_id), '検索条件': 'オフモール - カメラ', 'キーワード': ''})
+
+        if not new_rows:
+            return
+        final_df = pd.concat([df, pd.DataFrame(new_rows)], ignore_index=True)
+        sheet.clear()
+        sheet.update('A1', [final_df.columns.tolist()] + final_df.astype(str).values.tolist())
+        load_data.clear()
+    except Exception:
+        pass  # 初期設定失敗は致命的でないため無視
+
 def save_merged_data(client, full_df, edited_df, user_id, restriction_type):
     try:
         allowed_opts = get_allowed_options(client, restriction_type)
@@ -387,6 +417,7 @@ def main():
             if target_uid:
                 saved_restriction, saved_plan_id = get_user_temp_settings(client, target_uid)
                 update_user_stripe_data(client, target_uid, stripe_id=session.customer, subscription_id=session.subscription, plan_id=saved_plan_id, restriction_type=saved_restriction, valid_until="")
+                add_initial_notification_settings(client, target_uid, saved_restriction)
                 st.success("🎉 お支払いが完了しました！"); time.sleep(3); st.query_params.clear()
                 st.session_state['logged_in_user_id'] = target_uid
                 st.rerun()
