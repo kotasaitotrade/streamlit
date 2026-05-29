@@ -492,7 +492,34 @@ def main():
             use_option = st.checkbox(f"✨ キーワード通知オプションを追加 (+¥{OPTION_PRICE:,})")
             target_price_id = PLANS[plan_key]['opt_id'] if use_option else PLANS[plan_key]['base_id']
             target_plan_str = PLANS[plan_key]['opt_plan_id'] if use_option else PLANS[plan_key]['base_plan_id']
-            if st.button("お支払い画面へ進む"):
+
+            st.divider()
+            st.markdown("#### 📋 利用規約")
+            st.markdown("""
+<div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;padding:16px;font-size:0.85rem;line-height:1.7;max-height:220px;overflow-y:auto;">
+
+**第1条（サービスの性質）**
+本サービスは、フリマ・オークションサイトの新着商品情報をDiscordへ通知するツールです。通知はリアルタイムを目指していますが、確実な配信を保証するものではありません。
+
+**第2条（サービスの中断・停止）**
+サーバーメンテナンス、障害、外部APIの仕様変更、その他やむを得ない事情により、予告なく通知が遅延・停止する場合があります。これらによって生じた損害について、運営は一切の責任を負いません。
+
+**第3条（免責事項）**
+本サービスの利用により生じた商機の逸失・損失・損害（通知の未着・遅延・誤通知を含む）について、運営は一切の責任を負いません。商品の購入判断はユーザー自身の責任において行ってください。
+
+**第4条（料金・解約）**
+月額料金は前払い制です。解約は「プラン契約・解約」メニューからいつでも行えます。解約後も契約期間終了まではサービスをご利用いただけます。日割り返金には対応しておりません。
+
+**第5条（禁止事項）**
+アカウントの第三者への譲渡・共有、サービスの不正利用、リバースエンジニアリング等を禁止します。違反が認められた場合、予告なくアカウントを停止することがあります。
+
+**第6条（規約の変更）**
+運営は本規約を予告なく変更する場合があります。変更後もサービスを継続利用した場合、新規約に同意したものとみなします。
+
+</div>
+""", unsafe_allow_html=True)
+            agree = st.checkbox("上記の利用規約を読み、同意します")
+            if st.button("お支払い画面へ進む", disabled=not agree):
                 update_user_temp_settings(client, uid, light_restriction, target_plan_str)
                 suc, url = create_stripe_checkout_session(uid, target_price_id)
                 if suc: st.link_button("支払いを完了させる", url, type="primary")
