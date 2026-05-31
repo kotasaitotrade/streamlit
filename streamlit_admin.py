@@ -331,6 +331,22 @@ def show_user_management(client, users_df):
 
                 with col_a:
                     st.write("**アカウント状態**")
+                    # ロール変更（user ↔ sales）
+                    role_opts = ["user", "sales"]
+                    role_labels = {"user": "🟢 ユーザー", "sales": "🟡 営業者"}
+                    cur_role_idx = role_opts.index(role) if role in role_opts else 0
+                    new_role = st.selectbox(
+                        "ロール", role_opts,
+                        format_func=lambda x: role_labels[x],
+                        index=cur_role_idx,
+                        key=f"role_{uid}",
+                        label_visibility="collapsed"
+                    )
+                    if st.button("ロール変更", key=f"role_btn_{uid}"):
+                        ok, msg = update_user_field(client, uid, 'role', new_role)
+                        if ok: st.success(f"{role_labels[new_role]} に変更しました"); st.rerun()
+                        else: st.error(msg)
+                    # 無効化 / 有効化
                     if role == 'disabled':
                         if st.button("✅ 有効化", key=f"enable_{uid}"):
                             ok, msg = update_user_field(client, uid, 'role', 'user')
