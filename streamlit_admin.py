@@ -142,6 +142,18 @@ def update_user_field(client, user_id, col_name, value):
     except Exception as e:
         return False, str(e)
 
+def ensure_user_sheet_headers(client):
+    try:
+        ws = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
+        headers = ws.row_values(1)
+        new_headers = [c for c in USER_COLS if c not in headers]
+        if new_headers:
+            for i, h in enumerate(new_headers):
+                ws.update_cell(1, len(headers) + 1 + i, h)
+            get_users_df.clear()
+    except:
+        pass
+
 def login_admin(client, login_input, password):
     """管理者・営業者のログイン"""
     try:
@@ -547,6 +559,8 @@ def main():
     if not client:
         st.error("データベース接続エラー。管理者に連絡してください。")
         return
+
+    ensure_user_sheet_headers(client)
 
     # セッション初期化
     for key, default in [('logged_in_uid', None), ('logged_in_name', ''),
