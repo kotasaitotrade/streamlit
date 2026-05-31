@@ -47,6 +47,14 @@ PLANS = {
 }
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 
+# 管理者アプリと共有する列定義（順番を変えないこと）
+USER_COLS = [
+    'ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'stripe_customer_id', 'subscription_id',
+    'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine', 'secret_key',
+    'failed_count', 'locked_until', 'temp_plan_settings', 'role', 'joined_at',
+    'assigned_sales', 'force_pw_change'
+]
+
 # ==========================================
 #   Secrets & 認証処理
 # ==========================================
@@ -169,24 +177,77 @@ def get_users_df(_client):
     try:
         sheet = _client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         data = sheet.get_all_values()
-        cols = ['ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'stripe_customer_id', 'subscription_id', 'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine', 'secret_key', 'failed_count', 'locked_until', 'temp_plan_settings']
-        if len(data) < 2: return pd.DataFrame(columns=cols)
+        if len(data) < 2: return pd.DataFrame(columns=USER_COLS)
         df = pd.DataFrame(data[1:], columns=data[0]).astype(str)
-        for c in cols:
+        for c in USER_COLS:
             if c not in df.columns: df[c] = ""
         return df
-    except: return pd.DataFrame()
+    except: return pd.DataFrame(columns=USER_COLS)
+
+def ensure_user_sheet_headers(client):
+    """シートに不足している列ヘッダーを追記する（初回のみ実際に書き込みが走る）"""
+    try:
+        ws = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
+        headers = ws.row_values(1)
+        new_headers = [c for c in USER_COLS if c not in headers]
+        if new_headers:
+            for i, h in enumerate(new_headers):
+                ws.update_cell(1, len(headers) + 1 + i, h)
+            get_users_df.clear()
+    except:
+        pass
+
+def _find_user_row_num(ws, user_id):
+    """列1（ユーザーID列）のみ検索して行番号を返す"""
+    try:
+        col_values = ws.col_values(1)
+        for i, val in enumerate(col_values):
+            if val == str(user_id):
+                return i + 1
+        return None
+    except:
+        return None
+
+def _update_user_field(client, user_id, col_name, value):
+    """任意列をヘッダー名で指定して更新する"""
+    try:
+        ws = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
+        headers = ws.row_values(1)
+        col_idx = headers.index(col_name) + 1 if col_name in headers else USER_COLS.index(col_name) + 1
+        row_num = _find_user_row_num(ws, user_id)
+        if row_num:
+            ws.update_cell(row_num, col_idx, str(value))
+            get_users_df.clear()
+            return True
+        return False
+    except:
+        return False
 
 def login_user(client, login_input, password):
     try:
         ws = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
-        cell = ws.find(str(login_input))
-        if not cell: return False, "ユーザーIDまたはパスワードが間違っています", "", "", ""
-        row_values = ws.row_values(cell.row)
-        if len(row_values) < 14: row_values += [""] * (14 - len(row_values))
-        if row_values[2] == hash_password(password): return True, "成功", row_values[0], row_values[1], row_values[10]
-        return False, "ユーザーIDまたはパスワードが間違っています", "", "", ""
-    except: return False, "ログイン処理エラー", "", "", ""
+        row_num = _find_user_row_num(ws, login_input)
+        if not row_num:
+            # IDで見つからなければ名前でも探す
+            name_col = ws.col_values(2)
+            for i, val in enumerate(name_col):
+                if val == str(login_input):
+                    row_num = i + 1
+                    break
+        if not row_num:
+            return False, "ユーザーIDまたはパスワードが間違っています", "", "", "", ""
+        row_values = ws.row_values(row_num)
+        while len(row_values) < len(USER_COLS):
+            row_values.append("")
+        if row_values[2] != hash_password(password):
+            return False, "ユーザーIDまたはパスワードが間違っています", "", "", "", ""
+        role = row_values[14] if row_values[14] else "user"
+        if role == "disabled":
+            return False, "このアカウントは無効化されています", "", "", "", ""
+        force_pw = row_values[17]  # force_pw_change
+        return True, "成功", row_values[0], row_values[1], row_values[10], force_pw
+    except:
+        return False, "ログイン処理エラー", "", "", "", ""
 
 def register_user(client, user_id, user_name, password):
     get_users_df.clear()
@@ -203,7 +264,12 @@ def register_user(client, user_id, user_name, password):
             if not suc: return False, f"Discord作成失敗: {res}"
             webhook_url = res
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
-        sheet.append_row([str(user_id), str(user_name), hash_password(password), "", "", "", webhook_url, "", "", assigned_machine, "", "0", "", ""])
+        # USER_COLS順に18列で登録
+        sheet.append_row([
+            str(user_id), str(user_name), hash_password(password), "", "", "",
+            webhook_url, "", "", assigned_machine, "", "0", "", "",
+            "user", "", "", ""
+        ])
         get_users_df.clear()
         return True, "登録完了"
     except Exception as e: return False, f"エラー: {e}"
@@ -424,7 +490,10 @@ def main():
                 st.rerun()
         st.stop()
 
+    ensure_user_sheet_headers(client)
+
     if 'logged_in_user_id' not in st.session_state: st.session_state['logged_in_user_id'] = None
+    if 'force_pw_change' not in st.session_state: st.session_state['force_pw_change'] = False
 
     if st.session_state['logged_in_user_id'] is None:
         st.markdown("## 📊 ツウチマネージャー (市場リサーチツール)")
@@ -433,8 +502,12 @@ def main():
             li = st.text_input("ID / 名前", key="li")
             lp = st.text_input("パスワード", type="password", key="lp")
             if st.button("ログイン", type="primary"):
-                suc, msg, uid, uname, _ = login_user(client, li, lp)
-                if suc: st.session_state['logged_in_user_id'] = uid; st.session_state['logged_in_user_name'] = uname; st.rerun()
+                suc, msg, uid, uname, _, force_pw = login_user(client, li, lp)
+                if suc:
+                    st.session_state['logged_in_user_id'] = uid
+                    st.session_state['logged_in_user_name'] = uname
+                    st.session_state['force_pw_change'] = (force_pw == "1")
+                    st.rerun()
                 else: st.error(msg)
         with tab2:
             ri, rn, rp = st.text_input("Discord ID", key="ri"), st.text_input("表示名", key="rn"), st.text_input("パスワード", type="password", key="rp")
@@ -445,6 +518,28 @@ def main():
                     if suc: st.success(msg); st.balloons()
                     else: st.error(msg)
         show_tokushoho()
+        st.stop()
+
+    # パスワード強制変更が必要な場合
+    if st.session_state.get('force_pw_change'):
+        uid_tmp = st.session_state['logged_in_user_id']
+        st.title("🔐 パスワードの変更が必要です")
+        st.warning("管理者によってパスワードの変更が要求されています。新しいパスワードを設定してください。")
+        with st.form("force_pw_form"):
+            new_pw = st.text_input("新しいパスワード", type="password")
+            confirm_pw = st.text_input("確認（再入力）", type="password")
+            submitted = st.form_submit_button("パスワードを変更する", type="primary")
+        if submitted:
+            if not new_pw or not confirm_pw: st.error("パスワードを入力してください")
+            elif new_pw != confirm_pw: st.error("パスワードが一致しません")
+            elif len(new_pw) < 6: st.error("パスワードは6文字以上で設定してください")
+            else:
+                _update_user_field(client, uid_tmp, 'パスワードハッシュ', hash_password(new_pw))
+                _update_user_field(client, uid_tmp, 'force_pw_change', "")
+                st.success("パスワードを変更しました")
+                st.session_state['force_pw_change'] = False
+                time.sleep(1.5)
+                st.rerun()
         st.stop()
 
     uid = st.session_state['logged_in_user_id']
@@ -618,7 +713,29 @@ def main():
 
     elif menu == "アカウント設定":
         st.subheader("⚙️ アカウント設定")
-        st.info("機能は一時的に省略されています。")
+        st.write("#### パスワード変更")
+        with st.form("self_pw_form"):
+            current_pw = st.text_input("現在のパスワード", type="password")
+            new_pw = st.text_input("新しいパスワード", type="password")
+            confirm_pw = st.text_input("確認（再入力）", type="password")
+            submitted = st.form_submit_button("パスワードを変更する")
+        if submitted:
+            if not current_pw or not new_pw or not confirm_pw:
+                st.error("全項目を入力してください")
+            elif new_pw != confirm_pw:
+                st.error("新しいパスワードが一致しません")
+            elif len(new_pw) < 6:
+                st.error("パスワードは6文字以上で設定してください")
+            else:
+                try:
+                    ws = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
+                    row_num = _find_user_row_num(ws, uid)
+                    if not row_num: st.error("ユーザーが見つかりません")
+                    elif ws.row_values(row_num)[2] != hash_password(current_pw): st.error("現在のパスワードが違います")
+                    else:
+                        _update_user_field(client, uid, 'パスワードハッシュ', hash_password(new_pw))
+                        st.success("パスワードを変更しました")
+                except Exception as e: st.error(f"エラー: {e}")
 
 if __name__ == "__main__":
     main()
