@@ -150,9 +150,9 @@ def ensure_user_sheet_headers(client):
         headers = ws.row_values(1)
         new_headers = [c for c in USER_COLS if c not in headers]
         if new_headers:
-            cols_to_add = (len(headers) + len(new_headers)) - ws.col_count
-            if cols_to_add > 0:
-                ws.add_cols(cols_to_add)
+            needed_cols = len(headers) + len(new_headers)
+            if ws.col_count < needed_cols:
+                ws.resize(rows=ws.row_count, cols=needed_cols)
             for i, h in enumerate(new_headers):
                 ws.update_cell(1, len(headers) + 1 + i, h)
             get_users_df.clear()
@@ -521,6 +521,20 @@ def show_monthly_fee(client, users_df, current_uid, current_role):
 # ==========================================
 #   ページ: 担当ユーザー一覧（営業者用）
 # ==========================================
+def _is_expired(valid_until_str):
+    try:
+        exp = datetime.strptime(valid_until_str.strip().split(' ')[0], '%Y/%m/%d').date()
+        return exp <= datetime.now().date()
+    except:
+        return False
+
+def _billing_confirmed(joined_at_str):
+    try:
+        billing_day = datetime.strptime(joined_at_str.strip().split(' ')[0], '%Y/%m/%d').day
+        return datetime.now().date().day >= billing_day
+    except:
+        return False
+
 def show_assigned_users(users_df, current_uid):
     st.subheader("👤 担当ユーザー一覧")
 
@@ -550,17 +564,45 @@ def show_assigned_users(users_df, current_uid):
         else:
             status = "継続中"
 
+        joined_at_raw = str(u.get('joined_at', '')).strip()
+        billing_day = None
+        try:
+            billing_day = datetime.strptime(joined_at_raw.split(' ')[0], '%Y/%m/%d').day
+        except:
+            pass
+        today = datetime.now().date()
+        commission = SALES_COMMISSION.get(plan_id, 0)
+        if status in ['退会済', '⚫ 無効']:
+            commission_str = '-'
+        elif billing_day and today.day >= billing_day:
+            commission_str = f"¥{commission:,} ✓"
+        else:
+            commission_str = f"¥{commission:,}"
+
         rows.append({
             'ユーザー名': str(u.get('ユーザー名', '')),
             'ユーザーID': str(u.get('ユーザーID', '')),
             'プラン': PLAN_DISPLAY_NAME.get(plan_id, plan_id or '未契約'),
-            '入会日': str(u.get('joined_at', '-')).split(' ')[0],
+            '入会日': joined_at_raw.split(' ')[0] if joined_at_raw and joined_at_raw not in ['nan', 'None', ''] else '-',
             '有効期限': valid_until.split(' ')[0] if valid_until and valid_until not in ['nan', 'None', ''] else '継続中',
             'ステータス': status,
+            '今月入金額': commission_str,
         })
 
     df = pd.DataFrame(rows)
-    st.caption(f"担当ユーザー数: {len(df)}人")
+    active_count = len([r for r in rows if r['ステータス'] == '継続中'])
+    confirmed_total = sum(
+        SALES_COMMISSION.get(str(u.get('plan_id', '')), 0)
+        for _, u in assigned.iterrows()
+        if str(u.get('role', '')) not in ['disabled']
+        and not (str(u.get('valid_until', '')).strip() not in ['', 'nan', 'None'] and
+                 _is_expired(str(u.get('valid_until', ''))))
+        and _billing_confirmed(str(u.get('joined_at', '')))
+    )
+
+    c1, c2 = st.columns(2)
+    c1.metric("担当ユーザー数", f"{len(df)}人（継続中 {active_count}人）")
+    c2.metric(f"{datetime.now().month}月 確認済入金合計", f"¥{confirmed_total:,}")
 
     def highlight_status(row):
         if row.get('ステータス') in ['退会済', '⚫ 無効']:
