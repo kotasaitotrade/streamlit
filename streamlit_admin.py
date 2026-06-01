@@ -150,6 +150,9 @@ def ensure_user_sheet_headers(client):
         headers = ws.row_values(1)
         new_headers = [c for c in USER_COLS if c not in headers]
         if new_headers:
+            needed_cols = len(headers) + len(new_headers)
+            if needed_cols > ws.col_count:
+                ws.resize(rows=ws.row_count, cols=needed_cols)
             for i, h in enumerate(new_headers):
                 ws.update_cell(1, len(headers) + 1 + i, h)
             get_users_df.clear()
