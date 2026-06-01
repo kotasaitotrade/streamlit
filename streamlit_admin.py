@@ -17,7 +17,10 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from gspread.exceptions import APIError
 
-st.set_page_config(page_title="管理者パネル", layout="wide")
+st.set_page_config(page_title="ツウチマネージャー / 管理者パネル", layout="wide", page_icon="🜨")
+
+from theme import apply_theme
+apply_theme()
 
 # ==========================================
 #   設定・定数（streamlit_new_item.py と共通）
