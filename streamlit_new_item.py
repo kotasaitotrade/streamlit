@@ -194,11 +194,8 @@ def ensure_user_sheet_headers(client):
             cols_to_add = (len(headers) + len(new_headers)) - ws.col_count
             if cols_to_add > 0:
                 ws.add_cols(cols_to_add)
-            start_col = len(headers) + 1
-            end_col = len(headers) + len(new_headers)
-            from gspread.utils import rowcol_to_a1
-            cell_range = f"{rowcol_to_a1(1, start_col)}:{rowcol_to_a1(1, end_col)}"
-            ws.update(cell_range, [new_headers])
+            for i, h in enumerate(new_headers):
+                ws.update_cell(1, len(headers) + 1 + i, h)
             get_users_df.clear()
     except:
         pass
