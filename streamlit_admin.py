@@ -178,13 +178,10 @@ def login_admin(client, login_input, password):
             row_values.append("")
         if row_values[2] != hash_password(password):
             return False, "IDまたはパスワードが違います", "", "", "", ""
-        headers = ws.row_values(1)
-        role_idx = headers.index('role') if 'role' in headers else 14
-        role = row_values[role_idx] if role_idx < len(row_values) and row_values[role_idx] else "user"
+        role = row_values[14] if row_values[14] else "user"
         if role not in ['admin', 'sales']:
             return False, "このアカウントには管理者パネルへのアクセス権がありません", "", "", "", ""
-        force_pw_idx = headers.index('force_pw_change') if 'force_pw_change' in headers else 17
-        force_pw = row_values[force_pw_idx] if force_pw_idx < len(row_values) else ""
+        force_pw = row_values[17]
         return True, "成功", row_values[0], row_values[1], role, force_pw
     except:
         return False, "ログイン処理エラー", "", "", "", ""
