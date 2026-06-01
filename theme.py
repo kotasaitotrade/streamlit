@@ -1,8 +1,8 @@
 """
 和モダン・クラフト UIテーマ
 - 配色: 未漂白生成り、深焦茶、生漆朱、金茶
-- タイポ: Klee One (本文・手書き風) + Yuji Mai (見出し・楷書)
-- 質感: 紙のような柔らかい背景、控えめな影、緊張感のない余白
+- タイポ: Klee One (本文) + Yuji Mai (見出し)
+- 注意: Streamlit の Material Symbols アイコンフォントを壊さないよう、対象セレクタを限定
 """
 import streamlit as st
 
@@ -10,54 +10,69 @@ import streamlit as st
 _THEME_CSS = """
 <style>
 /* ─── Web Fonts ─────────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=Klee+One:wght@400;600&family=Yuji+Mai&family=Noto+Sans+Mono+CJK+JP&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Klee+One:wght@400;600&family=Yuji+Mai&display=swap');
 
 /* ─── Color Tokens ──────────────────────────── */
 :root {
-  --paper:       #FAF6EE;   /* 未漂白生成り（背景） */
-  --paper-deep:  #F3EDDF;   /* 一段濃い生成り */
-  --ink:         #2D241A;   /* 焦茶墨色（本文） */
-  --ink-soft:    #6B5947;   /* 淡墨（補助テキスト） */
-  --ink-faint:   #A89683;   /* ごく薄い茶 */
-  --vermilion:   #B5443E;   /* 朱赤・生漆 */
+  --paper:       #FAF6EE;
+  --paper-deep:  #F3EDDF;
+  --ink:         #2D241A;
+  --ink-soft:    #6B5947;
+  --ink-faint:   #A89683;
+  --vermilion:   #B5443E;
   --vermilion-deep: #8E2F2A;
-  --kincha:      #B8923C;   /* 金茶 */
-  --moss:        #6A7F4F;   /* 苔色（継続中バッジ用） */
-  --border:      #E0D3BB;   /* 薄ベージュ罫線 */
+  --kincha:      #B8923C;
+  --moss:        #6A7F4F;
+  --border:      #E0D3BB;
   --border-soft: #EEE5D2;
   --shadow:      0 1px 0 rgba(0,0,0,0.02), 0 8px 24px -16px rgba(45,36,26,0.18);
 }
 
-/* ─── App Background: subtle paper texture ─── */
+/* ─── App Background ────────────────────────── */
 [data-testid="stAppViewContainer"], .main, .stApp {
   background-color: var(--paper) !important;
-  background-image:
-    radial-gradient(circle at 18% 22%, rgba(184,146,60,0.04) 0%, transparent 32%),
-    radial-gradient(circle at 82% 78%, rgba(181,68,62,0.03) 0%, transparent 30%),
-    repeating-linear-gradient(
-      45deg,
-      rgba(45,36,26,0.012) 0px, rgba(45,36,26,0.012) 1px,
-      transparent 1px, transparent 4px
-    );
-  color: var(--ink);
 }
 
-/* ─── Typography ────────────────────────────── */
-html, body, [class*="css"], .stMarkdown, .stText, p, span, div, label, input, textarea, button {
+/* ─── Typography: Streamlit固有のテキスト要素のみに適用 ─── */
+/* Material Symbols / Material Icons は除外 */
+[data-testid="stMarkdownContainer"],
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stText"],
+[data-testid="stCaptionContainer"],
+.stMarkdown p,
+.stMarkdown li,
+[data-testid="stMetricLabel"] *,
+[data-testid="stMetricValue"],
+[data-testid="stMetricDelta"],
+[data-testid="stExpander"] summary,
+[data-testid="stTextInput"] label,
+[data-testid="stTextArea"] label,
+[data-testid="stSelectbox"] label,
+[data-testid="stNumberInput"] label,
+[data-testid="stCheckbox"] label,
+[data-testid="stRadio"] label,
+[data-testid="stDateInput"] label {
   font-family: 'Klee One', 'Hiragino Mincho ProN', 'Yu Mincho', serif !important;
-  color: var(--ink);
 }
 
-h1, h2, h3, h4, h5, h6, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
-  font-family: 'Yuji Mai', 'Klee One', serif !important;
+/* 見出し */
+[data-testid="stMarkdownContainer"] h1,
+[data-testid="stMarkdownContainer"] h2,
+[data-testid="stMarkdownContainer"] h3,
+[data-testid="stMarkdownContainer"] h4,
+[data-testid="stHeading"] h1,
+[data-testid="stHeading"] h2,
+[data-testid="stHeading"] h3 {
+  font-family: 'Yuji Mai', 'Klee One', 'Hiragino Mincho ProN', serif !important;
   color: var(--ink) !important;
   font-weight: 400 !important;
   letter-spacing: 0.04em;
 }
 
-/* Numbers / IDs in mono */
-[data-testid="stMetricValue"], [class*="dataframe"] td:has(> div > span:not(:has(*))) {
-  font-family: 'Noto Sans Mono CJK JP', 'JetBrains Mono', ui-monospace, monospace !important;
+/* ─── Body text color ──────────────────────── */
+[data-testid="stMarkdownContainer"], .stMarkdown {
+  color: var(--ink);
 }
 
 /* ─── Sidebar ───────────────────────────────── */
@@ -65,31 +80,25 @@ h1, h2, h3, h4, h5, h6, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
   background-color: var(--paper-deep) !important;
   border-right: 1px solid var(--border);
 }
-[data-testid="stSidebar"] * {
-  color: var(--ink);
-}
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] strong {
   color: var(--vermilion);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
 }
 
 /* Sidebar radio - menu look */
 [data-testid="stSidebar"] [role="radiogroup"] label {
-  padding: 0.4rem 0.6rem;
+  padding: 0.3rem 0.4rem;
   margin: 0.1rem 0;
-  border-radius: 4px;
+  border-radius: 3px;
   transition: background 0.15s;
-  font-family: 'Klee One', serif !important;
-  font-size: 0.98rem;
 }
 [data-testid="stSidebar"] [role="radiogroup"] label:hover {
   background: rgba(184,146,60,0.10);
 }
 
-/* ─── Header (top app bar) ──────────────────── */
+/* ─── Header ────────────────────────────────── */
 [data-testid="stHeader"] {
   background-color: transparent !important;
-  backdrop-filter: blur(8px);
 }
 
 /* ─── Buttons ───────────────────────────────── */
@@ -98,10 +107,10 @@ h1, h2, h3, h4, h5, h6, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
   color: var(--ink) !important;
   border: 1px solid var(--ink) !important;
   border-radius: 2px !important;
-  font-family: 'Klee One', serif !important;
+  font-family: 'Klee One', 'Hiragino Mincho ProN', serif !important;
   font-weight: 600 !important;
-  padding: 0.45rem 1.1rem !important;
-  letter-spacing: 0.08em;
+  padding: 0.35rem 0.9rem !important;
+  letter-spacing: 0.04em;
   box-shadow: 2px 2px 0 var(--ink) !important;
   transition: transform 0.08s, box-shadow 0.08s;
 }
@@ -121,17 +130,22 @@ h1, h2, h3, h4, h5, h6, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
 .stButton > button[kind="primary"]:hover {
   box-shadow: 1px 1px 0 var(--vermilion-deep) !important;
   background: var(--vermilion-deep) !important;
+  color: var(--paper) !important;
 }
 
 /* ─── Inputs ────────────────────────────────── */
-.stTextInput input, .stTextArea textarea, .stNumberInput input, .stSelectbox [data-baseweb="select"] > div {
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea,
+[data-testid="stNumberInput"] input,
+[data-testid="stSelectbox"] [data-baseweb="select"] > div {
   background: var(--paper) !important;
   border: 1px solid var(--border) !important;
   border-radius: 2px !important;
   color: var(--ink) !important;
-  font-family: 'Klee One', serif !important;
+  font-family: 'Klee One', 'Hiragino Mincho ProN', serif !important;
 }
-.stTextInput input:focus, .stTextArea textarea:focus, .stNumberInput input:focus {
+[data-testid="stTextInput"] input:focus,
+[data-testid="stNumberInput"] input:focus {
   border-color: var(--vermilion) !important;
   box-shadow: 0 0 0 1px var(--vermilion) !important;
 }
@@ -141,18 +155,16 @@ h1, h2, h3, h4, h5, h6, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
   background: var(--paper) !important;
   border: 1px solid var(--border);
   border-radius: 2px;
-  padding: 0.8rem 1rem;
+  padding: 0.7rem 0.9rem;
   box-shadow: var(--shadow);
 }
 [data-testid="stMetricLabel"] {
   color: var(--ink-soft) !important;
   font-size: 0.78rem !important;
-  letter-spacing: 0.08em;
-  text-transform: none;
+  letter-spacing: 0.04em;
 }
 [data-testid="stMetricValue"] {
   color: var(--ink) !important;
-  font-size: 1.6rem !important;
   font-weight: 600 !important;
 }
 
@@ -161,13 +173,12 @@ h1, h2, h3, h4, h5, h6, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
   background: var(--paper) !important;
   border: 1px solid var(--border) !important;
   border-radius: 2px !important;
-  margin-bottom: 0.4rem;
-  box-shadow: var(--shadow);
+  margin-bottom: 0.3rem;
 }
 [data-testid="stExpander"] summary {
-  padding: 0.7rem 1rem;
-  font-family: 'Klee One', serif !important;
+  padding: 0.6rem 0.9rem;
   font-weight: 600;
+  color: var(--ink) !important;
 }
 [data-testid="stExpander"] summary:hover {
   background: var(--paper-deep) !important;
@@ -181,55 +192,46 @@ h1, h2, h3, h4, h5, h6, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
 }
 [data-baseweb="tab"] {
   background: transparent !important;
-  font-family: 'Klee One', serif !important;
-  letter-spacing: 0.06em;
+  font-family: 'Klee One', 'Hiragino Mincho ProN', serif !important;
   color: var(--ink-soft) !important;
 }
 [data-baseweb="tab"][aria-selected="true"] {
   color: var(--vermilion) !important;
-  border-bottom: 2px solid var(--vermilion) !important;
+  border-bottom-color: var(--vermilion) !important;
 }
 
-/* ─── Dataframes / data_editor ─────────────── */
+/* ─── Dataframes ────────────────────────────── */
 [data-testid="stDataFrame"], [data-testid="stDataEditor"] {
   border: 1px solid var(--border) !important;
   border-radius: 2px !important;
-  background: var(--paper) !important;
 }
 
 /* ─── Dividers ──────────────────────────────── */
 hr {
   border: none !important;
   border-top: 1px dashed var(--border) !important;
-  margin: 1.2rem 0 !important;
+  margin: 1rem 0 !important;
 }
 
 /* ─── Alerts ────────────────────────────────── */
 [data-testid="stAlert"] {
   border-radius: 2px !important;
   border-left: 3px solid var(--vermilion) !important;
-  background: rgba(181,68,62,0.06) !important;
-  color: var(--ink) !important;
-}
-
-/* ─── Checkboxes ────────────────────────────── */
-[data-testid="stCheckbox"] label {
-  font-family: 'Klee One', serif !important;
-  color: var(--ink) !important;
 }
 
 /* ─── Captions ──────────────────────────────── */
-[data-testid="stCaptionContainer"], .stCaption, small {
+[data-testid="stCaptionContainer"], .stCaption {
   color: var(--ink-soft) !important;
-  font-style: normal;
 }
 
-/* ─── Subheaders/page titles with brush feel ── */
-.stMarkdown h2, .stMarkdown h3 {
+/* ─── Headings with brush accent ───────────── */
+[data-testid="stHeading"] h2, [data-testid="stHeading"] h3,
+[data-testid="stMarkdownContainer"] h2, [data-testid="stMarkdownContainer"] h3 {
   position: relative;
   padding-left: 0.6rem;
 }
-.stMarkdown h2::before, .stMarkdown h3::before {
+[data-testid="stHeading"] h2::before, [data-testid="stHeading"] h3::before,
+[data-testid="stMarkdownContainer"] h2::before, [data-testid="stMarkdownContainer"] h3::before {
   content: '';
   position: absolute;
   left: 0;
