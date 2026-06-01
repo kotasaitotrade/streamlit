@@ -593,12 +593,11 @@ def show_monthly_fee(client, users_df, current_uid, current_role):
 #   営業者支払い 共通ヘルパー
 # ==========================================
 def _backfill_joined_at(client, users_df):
-    """空のjoined_atを今日日付で埋める（1セッション1回）"""
+    """空のjoined_atを今日日付で埋める（1セッション1回・バッチ更新）"""
     if st.session_state.get('_joined_at_backfilled'):
         return
     st.session_state['_joined_at_backfilled'] = True
-    today = datetime.now().strftime('%Y/%m/%d')
-    if 'joined_at' not in users_df.columns or 'role' not in users_df.columns:
+    if users_df is None or users_df.empty or 'joined_at' not in users_df.columns or 'role' not in users_df.columns:
         return
     targets = users_df[
         (~users_df['role'].astype(str).isin(['admin', 'sales'])) &
@@ -606,9 +605,24 @@ def _backfill_joined_at(client, users_df):
     ]
     if targets.empty:
         return
-    for _, u in targets.iterrows():
-        update_user_field(client, str(u['ユーザーID']), 'joined_at', today)
-    get_users_df.clear()
+    try:
+        ws = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
+        headers = ws.row_values(1)
+        col_idx = (headers.index('joined_at') if 'joined_at' in headers else USER_COLS.index('joined_at')) + 1
+        col_values = ws.col_values(1)
+        today = datetime.now().strftime('%Y/%m/%d')
+        updates = []
+        for _, u in targets.iterrows():
+            uid = str(u['ユーザーID'])
+            for i, v in enumerate(col_values):
+                if v == uid:
+                    updates.append({'range': gspread.utils.rowcol_to_a1(i + 1, col_idx), 'values': [[today]]})
+                    break
+        if updates:
+            ws.batch_update(updates)
+            get_users_df.clear()
+    except Exception:
+        pass
 
 
 def _payment_due_date(joined_at_str, year, month):
@@ -857,8 +871,9 @@ def main():
         st.stop()
 
     users_df = get_users_df(client)
-    _backfill_joined_at(client, users_df)
-    users_df = get_users_df(client)
+    if not users_df.empty:
+        _backfill_joined_at(client, users_df)
+        users_df = get_users_df(client)
 
     # サイドバー
     with st.sidebar:
