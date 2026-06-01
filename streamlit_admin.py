@@ -368,13 +368,17 @@ def show_user_management(client, users_df):
                     now = datetime.now()
                     commission = SALES_COMMISSION.get(plan_id, 0)
                     due_date = _payment_due_date(joined_at, now.year, now.month)
+                    next_year = now.year + (1 if now.month == 12 else 0)
+                    next_month = 1 if now.month == 12 else now.month + 1
+                    next_due_date = _payment_due_date(joined_at, next_year, next_month)
                     paid_months_str = str(user.get('paid_months', ''))
                     is_paid = _is_paid(paid_months_str, now.year, now.month)
 
-                    pcol1, pcol2, pcol3 = st.columns([2, 2, 2])
+                    pcol1, pcol2, pcol3, pcol4 = st.columns([2, 2, 2, 2])
                     pcol1.write(f"**営業者支払額:** ¥{commission:,}")
-                    pcol2.write(f"**支払予定日:** {due_date.strftime('%Y/%m/%d') if due_date else '-'}")
-                    with pcol3:
+                    pcol2.write(f"**当月支払日:** {due_date.strftime('%Y/%m/%d') if due_date else '-'}")
+                    pcol3.write(f"**翌月支払予定日:** {next_due_date.strftime('%Y/%m/%d') if next_due_date else '-'}")
+                    with pcol4:
                         new_paid = st.checkbox(
                             f"{now.month}月分 支払済み",
                             value=is_paid,
@@ -703,6 +707,9 @@ def show_assigned_users(client, users_df, current_uid):
         joined_at_raw = str(u.get('joined_at', '')).strip()
         commission = SALES_COMMISSION.get(plan_id, 0)
         due_date = _payment_due_date(joined_at_raw, now.year, now.month)
+        next_year = now.year + (1 if now.month == 12 else 0)
+        next_month = 1 if now.month == 12 else now.month + 1
+        next_due_date = _payment_due_date(joined_at_raw, next_year, next_month)
         paid_months_str = str(u.get('paid_months', ''))
         is_paid = _is_paid(paid_months_str, now.year, now.month)
         paid_map[uid] = (is_paid, paid_months_str)
@@ -717,7 +724,8 @@ def show_assigned_users(client, users_df, current_uid):
             'ユーザーID': uid,
             'プラン': PLAN_DISPLAY_NAME.get(plan_id, plan_id or '未契約'),
             '入会日': joined_at_raw.split(' ')[0] if joined_at_raw and joined_at_raw not in ['nan', 'None', ''] else '-',
-            '支払予定日': due_date.strftime('%Y/%m/%d') if due_date else '-',
+            '当月支払日': due_date.strftime('%Y/%m/%d') if due_date else '-',
+            '翌月支払予定日': next_due_date.strftime('%Y/%m/%d') if next_due_date else '-',
             'ステータス': status,
             '今月入金額': commission_str,
             f'{now.month}月入金確認': is_paid,
@@ -752,7 +760,7 @@ def show_assigned_users(client, users_df, current_uid):
         column_config={
             paid_col: st.column_config.CheckboxColumn(paid_col, help="入金を確認したらチェック"),
         },
-        disabled=['ユーザー名', 'ユーザーID', 'プラン', '入会日', '支払予定日', 'ステータス', '今月入金額'],
+        disabled=['ユーザー名', 'ユーザーID', 'プラン', '入会日', '当月支払日', '翌月支払予定日', 'ステータス', '今月入金額'],
         hide_index=True,
         use_container_width=True,
         key=f"assigned_editor_{current_uid}_{now.year}_{now.month}",
