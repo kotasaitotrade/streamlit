@@ -145,20 +145,27 @@ def update_user_field(client, user_id, col_name, value):
 def ensure_user_sheet_headers(client):
     if st.session_state.get('_headers_ensured'):
         return
+    st.session_state['_headers_ensured'] = True
     try:
         ws = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         headers = ws.row_values(1)
         new_headers = [c for c in USER_COLS if c not in headers]
-        if new_headers:
-            needed_cols = len(headers) + len(new_headers)
-            if ws.col_count < needed_cols:
-                ws.resize(rows=ws.row_count, cols=needed_cols)
-            for i, h in enumerate(new_headers):
-                ws.update_cell(1, len(headers) + 1 + i, h)
-            get_users_df.clear()
-        st.session_state['_headers_ensured'] = True
-    except Exception as e:
-        st.session_state['_header_error'] = str(e)
+        if not new_headers:
+            return
+        base = max(len(headers), ws.col_count)
+        needed_cols = base + len(new_headers)
+        try:
+            ws.resize(rows=ws.row_count, cols=needed_cols)
+        except Exception:
+            pass
+        for i, h in enumerate(new_headers):
+            try:
+                ws.update_cell(1, base + 1 + i, h)
+            except Exception:
+                pass
+        get_users_df.clear()
+    except Exception:
+        pass
 
 def login_admin(client, login_input, password):
     """管理者・営業者のログイン"""
@@ -677,8 +684,6 @@ def main():
         return
 
     ensure_user_sheet_headers(client)
-    if st.session_state.get('_header_error'):
-        st.error(f"シートヘッダー補完エラー: {st.session_state['_header_error']}")
 
     # セッション初期化
     for key, default in [('logged_in_uid', None), ('logged_in_name', ''),
