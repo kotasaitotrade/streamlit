@@ -473,12 +473,50 @@ def show_user_management(client, users_df):
                         else: st.error(msg)
 
     with tab_sales:
-        st.write("#### 営業者一覧")
-        sales_list = users_df[users_df['role'] == 'sales'][['ユーザーID', 'ユーザー名']].copy()
+        now = datetime.now()
+        st.write(f"#### 営業者一覧（{now.year}年{now.month}月 支払い状況）")
+        sales_list = users_df[users_df['role'] == 'sales'].copy()
         if sales_list.empty:
             st.info("営業者アカウントはまだありません")
         else:
-            st.dataframe(sales_list.rename(columns={'ユーザーID': 'ID', 'ユーザー名': '名前'}),
+            sales_rows = []
+            for _, s in sales_list.iterrows():
+                sid = str(s['ユーザーID'])
+                sname = str(s['ユーザー名'])
+                # 担当ユーザー（無効を除く）
+                assigned = users_df[
+                    (users_df['assigned_sales'] == sid) &
+                    (~users_df['role'].isin(['admin', 'sales', 'disabled']))
+                ]
+                paid_amt = 0
+                pending_amt = 0
+                for _, u in assigned.iterrows():
+                    plan_id = str(u.get('plan_id', ''))
+                    commission = SALES_COMMISSION.get(plan_id, 0)
+                    valid_until = str(u.get('valid_until', '')).strip()
+                    if valid_until and valid_until not in ['', 'nan', 'None'] and _is_expired(valid_until):
+                        continue
+                    if _is_paid(str(u.get('paid_months', '')), now.year, now.month):
+                        paid_amt += commission
+                    else:
+                        pending_amt += commission
+                total = paid_amt + pending_amt
+                sales_rows.append({
+                    'ID': sid,
+                    '名前': sname,
+                    '担当ユーザー数': f"{len(assigned)}人",
+                    '今月合計': f"¥{total:,}",
+                    '支払済': f"¥{paid_amt:,}",
+                    '未払い': f"¥{pending_amt:,}",
+                })
+            sales_df_disp = pd.DataFrame(sales_rows)
+
+            def hl_pending(row):
+                if row.get('未払い') and row['未払い'] != '¥0':
+                    return ['background-color: #fff3cd'] * len(row)
+                return [''] * len(row)
+
+            st.dataframe(sales_df_disp.style.apply(hl_pending, axis=1),
                          use_container_width=True, hide_index=True)
         st.divider()
         st.write("#### 営業者アカウント作成")
