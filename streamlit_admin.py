@@ -603,27 +603,70 @@ def show_monthly_fee(client, users_df, current_uid, current_role):
         label = "営業者取り分合計"
     c3.metric(label, f"¥{fee_df['営業者取り分'].sum():,}")
 
+    # 入金確認チェック（任意の月の確認・取り消しが可能）
+    if current_role == 'sales' and period_kind != 'future':
+        st.divider()
+        sales_paid_months = sales_paid_map.get(str(current_uid), '')
+        is_paid_target = _is_paid(sales_paid_months, year_i, month_i)
+        new_paid = st.checkbox(
+            f"📥 {year_i}年{month_i}月分の入金を確認しました",
+            value=is_paid_target,
+            key=f"monthly_paid_{current_uid}_{year_i}_{month_i}",
+            help="過去の月もチェック・解除できます。",
+        )
+        if new_paid != is_paid_target:
+            new_val = _set_paid(sales_paid_months, year_i, month_i, new_paid)
+            ok, msg = update_user_field(client, str(current_uid), 'paid_months', new_val)
+            if ok:
+                st.success(f"{year_i}年{month_i}月分の入金確認状態を更新しました")
+                st.rerun()
+            else:
+                st.error(f"更新失敗: {msg}")
+
     if current_role == 'admin' and '担当営業者名' in fee_df.columns:
         st.divider()
         period_label = {'past': '実績', 'current': '予定', 'future': '予定'}[period_kind]
         st.write(f"#### 営業者別 支払い{period_label}")
-        # 各営業者の入金確認状態を併記
-        groups = []
+        st.caption(f"💡 各営業者の「{year_i}年{month_i}月入金確認」チェックを切り替えると即座にシートへ反映されます。")
         for sname, g in fee_df.groupby('担当営業者名'):
             # find sales id
             sid = ''
             for k, v in sales_map.items():
                 if v == sname:
                     sid = k; break
-            paid = _is_paid(sales_paid_map.get(sid, ''), year_i, month_i) if sid else False
-            groups.append({
-                '担当営業者名': sname,
-                '担当ユーザー数': len(g),
-                '支払い金額': f"¥{g['営業者取り分'].sum():,}",
-                '入金確認': '✅ 入金確認済' if paid else '⏳ 未確認',
-            })
-        summary = pd.DataFrame(groups).sort_values('担当ユーザー数', ascending=False)
-        st.dataframe(summary, use_container_width=True, hide_index=True)
+            if not sid:
+                # 未割当などはチェックボックス不要、表示のみ
+                sc1, sc2, sc3, sc4 = st.columns([2, 2, 2, 2])
+                sc1.write(f"**{sname}**")
+                sc2.metric("担当", f"{len(g)}人")
+                sc3.metric("支払い金額", f"¥{g['営業者取り分'].sum():,}")
+                sc4.write("—")
+                st.divider()
+                continue
+            sales_paid_months = sales_paid_map.get(sid, '')
+            is_paid = _is_paid(sales_paid_months, year_i, month_i)
+            status_label = "✅ 入金確認済" if is_paid else "⏳ 未確認"
+            sc1, sc2, sc3, sc4, sc5 = st.columns([2, 2, 2, 2, 2])
+            sc1.write(f"**{sname}**")
+            sc1.caption(sid)
+            sc2.metric("担当", f"{len(g)}人")
+            sc3.metric("支払い金額", f"¥{g['営業者取り分'].sum():,}")
+            sc4.metric("状態", status_label)
+            with sc5:
+                new_paid = st.checkbox(
+                    f"{year_i}年{month_i}月入金確認",
+                    value=is_paid,
+                    key=f"monthly_admin_paid_{sid}_{year_i}_{month_i}",
+                )
+                if new_paid != is_paid:
+                    new_val = _set_paid(sales_paid_months, year_i, month_i, new_paid)
+                    ok, msg = update_user_field(client, sid, 'paid_months', new_val)
+                    if ok:
+                        st.session_state['_last_op_result'] = (True, f"{sname} の{year_i}年{month_i}月入金確認を更新")
+                        st.rerun()
+                    else:
+                        st.error(msg)
+            st.divider()
 
 # ==========================================
 #   営業者支払い 共通ヘルパー
