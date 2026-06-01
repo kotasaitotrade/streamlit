@@ -514,6 +514,58 @@ def show_monthly_fee(client, users_df, current_uid, current_role):
         st.dataframe(summary, use_container_width=True, hide_index=True)
 
 # ==========================================
+#   ページ: 担当ユーザー一覧（営業者用）
+# ==========================================
+def show_assigned_users(users_df, current_uid):
+    st.subheader("👤 担当ユーザー一覧")
+
+    assigned = users_df[
+        (users_df['assigned_sales'] == str(current_uid)) &
+        (~users_df['role'].isin(['admin', 'sales']))
+    ].copy()
+
+    if assigned.empty:
+        st.info("担当ユーザーはまだいません")
+        return
+
+    rows = []
+    for _, u in assigned.iterrows():
+        plan_id = str(u.get('plan_id', ''))
+        valid_until = str(u.get('valid_until', '')).strip()
+        role = str(u.get('role', 'user'))
+
+        if role == 'disabled':
+            status = "⚫ 無効"
+        elif valid_until and valid_until not in ['', 'nan', 'None']:
+            try:
+                exp = datetime.strptime(valid_until.split(' ')[0], '%Y/%m/%d').date()
+                status = "退会済" if exp <= datetime.now().date() else "継続中"
+            except:
+                status = "継続中"
+        else:
+            status = "継続中"
+
+        rows.append({
+            'ユーザー名': str(u.get('ユーザー名', '')),
+            'ユーザーID': str(u.get('ユーザーID', '')),
+            'プラン': PLAN_DISPLAY_NAME.get(plan_id, plan_id or '未契約'),
+            '入会日': str(u.get('joined_at', '-')).split(' ')[0],
+            '有効期限': valid_until.split(' ')[0] if valid_until and valid_until not in ['nan', 'None', ''] else '継続中',
+            'ステータス': status,
+        })
+
+    df = pd.DataFrame(rows)
+    st.caption(f"担当ユーザー数: {len(df)}人")
+
+    def highlight_status(row):
+        if row.get('ステータス') in ['退会済', '⚫ 無効']:
+            return ['background-color: #fff3cd'] * len(row)
+        return [''] * len(row)
+
+    st.dataframe(df.style.apply(highlight_status, axis=1), use_container_width=True, hide_index=True)
+
+
+# ==========================================
 #   ページ: パスワード管理
 # ==========================================
 def show_password_management(client, users_df):
@@ -621,7 +673,7 @@ def main():
         st.caption(role_badge)
         st.divider()
 
-        menu_options = ["月額料金参照"]
+        menu_options = ["担当ユーザー", "月額料金参照"]
         if role == 'admin':
             menu_options = ["ユーザー管理", "月額料金参照", "パスワード管理"]
 
@@ -635,6 +687,8 @@ def main():
     # ルーティング
     if menu == "ユーザー管理" and role == 'admin':
         show_user_management(client, users_df)
+    elif menu == "担当ユーザー" and role == 'sales':
+        show_assigned_users(users_df, uid)
     elif menu == "月額料金参照":
         show_monthly_fee(client, users_df, uid, role)
     elif menu == "パスワード管理" and role == 'admin':
