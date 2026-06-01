@@ -172,19 +172,19 @@ def login_admin(client, login_input, password):
                     row_num = i + 1
                     break
         if not row_num:
-            return False, "IDまたはパスワードが違います", "", "", ""
+            return False, "IDまたはパスワードが違います", "", "", "", ""
         row_values = ws.row_values(row_num)
         while len(row_values) < len(USER_COLS):
             row_values.append("")
         if row_values[2] != hash_password(password):
-            return False, "IDまたはパスワードが違います", "", "", ""
+            return False, "IDまたはパスワードが違います", "", "", "", ""
         role = row_values[14] if row_values[14] else "user"
         if role not in ['admin', 'sales']:
-            return False, "このアカウントには管理者パネルへのアクセス権がありません", "", "", ""
+            return False, "このアカウントには管理者パネルへのアクセス権がありません", "", "", "", ""
         force_pw = row_values[17]
         return True, "成功", row_values[0], row_values[1], role, force_pw
     except:
-        return False, "ログイン処理エラー", "", "", ""
+        return False, "ログイン処理エラー", "", "", "", ""
 
 # ==========================================
 #   Stripe
