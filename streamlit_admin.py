@@ -143,6 +143,8 @@ def update_user_field(client, user_id, col_name, value):
         return False, str(e)
 
 def ensure_user_sheet_headers(client):
+    if st.session_state.get('_headers_ensured'):
+        return
     try:
         ws = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
         headers = ws.row_values(1)
@@ -151,8 +153,9 @@ def ensure_user_sheet_headers(client):
             for i, h in enumerate(new_headers):
                 ws.update_cell(1, len(headers) + 1 + i, h)
             get_users_df.clear()
-    except:
-        pass
+        st.session_state['_headers_ensured'] = True
+    except Exception as e:
+        st.session_state['_header_error'] = str(e)
 
 def login_admin(client, login_input, password):
     """管理者・営業者のログイン"""
@@ -295,6 +298,13 @@ def get_monthly_fee_data(users_df, year, month):
 # ==========================================
 def show_user_management(client, users_df):
     st.subheader("👥 ユーザー管理")
+
+    # 最後の操作結果を表示（rerun後も見える）
+    if st.session_state.get('_last_op_result'):
+        ok, msg = st.session_state.pop('_last_op_result')
+        if ok: st.success(msg)
+        else: st.error(msg)
+
     tab_users, tab_sales = st.tabs(["ユーザー一覧", "営業者管理"])
 
     with tab_users:
@@ -356,8 +366,12 @@ def show_user_management(client, users_df):
                     )
                     if st.button("ロール変更", key=f"role_btn_{uid}"):
                         ok, msg = update_user_field(client, uid, 'role', new_role)
-                        if ok: st.success(f"{role_labels[new_role]} に変更しました"); st.rerun()
-                        else: st.error(msg)
+                        get_users_df.clear()
+                        if ok:
+                            st.session_state['_last_op_result'] = (True, f"{role_labels[new_role]} に変更しました")
+                        else:
+                            st.session_state['_last_op_result'] = (False, f"ロール変更失敗: {msg}")
+                        st.rerun()
                     # 無効化 / 有効化
                     if role == 'disabled':
                         if st.button("✅ 有効化", key=f"enable_{uid}"):
@@ -561,6 +575,8 @@ def main():
         return
 
     ensure_user_sheet_headers(client)
+    if st.session_state.get('_header_error'):
+        st.error(f"シートヘッダー補完エラー: {st.session_state['_header_error']}")
 
     # セッション初期化
     for key, default in [('logged_in_uid', None), ('logged_in_name', ''),
