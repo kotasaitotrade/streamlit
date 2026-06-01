@@ -60,7 +60,7 @@ USER_COLS = [
     'ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'stripe_customer_id', 'subscription_id',
     'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine', 'secret_key',
     'failed_count', 'locked_until', 'temp_plan_settings', 'role', 'joined_at',
-    'assigned_sales', 'force_pw_change'
+    'assigned_sales', 'force_pw_change', 'paid_months'
 ]
 
 # ==========================================
@@ -363,6 +363,32 @@ def show_user_management(client, users_df):
                     s_name = sales_map.get(assigned_sales_id, "")
                     st.write(f"**担当営業:** {f'{s_name}({assigned_sales_id})' if s_name else '未割当'}")
 
+                if assigned_sales_id and assigned_sales_id in sales_map and role != 'disabled':
+                    st.divider()
+                    now = datetime.now()
+                    commission = SALES_COMMISSION.get(plan_id, 0)
+                    due_date = _payment_due_date(joined_at, now.year, now.month)
+                    paid_months_str = str(user.get('paid_months', ''))
+                    is_paid = _is_paid(paid_months_str, now.year, now.month)
+
+                    pcol1, pcol2, pcol3 = st.columns([2, 2, 2])
+                    pcol1.write(f"**営業者支払額:** ¥{commission:,}")
+                    pcol2.write(f"**支払予定日:** {due_date.strftime('%Y/%m/%d') if due_date else '-'}")
+                    with pcol3:
+                        new_paid = st.checkbox(
+                            f"{now.month}月分 支払済み",
+                            value=is_paid,
+                            key=f"paid_{uid}_{now.year}_{now.month}",
+                        )
+                        if new_paid != is_paid:
+                            new_val = _set_paid(paid_months_str, now.year, now.month, new_paid)
+                            ok, msg = update_user_field(client, uid, 'paid_months', new_val)
+                            if ok:
+                                st.session_state['_last_op_result'] = (True, f"{uname} の{now.month}月分支払い状態を更新")
+                                st.rerun()
+                            else:
+                                st.error(f"更新失敗: {msg}")
+
                 st.divider()
                 col_a, col_b, col_c, col_d = st.columns(4)
 
@@ -526,6 +552,33 @@ def show_monthly_fee(client, users_df, current_uid, current_role):
         st.dataframe(summary, use_container_width=True, hide_index=True)
 
 # ==========================================
+#   営業者支払い 共通ヘルパー
+# ==========================================
+def _payment_due_date(joined_at_str, year, month):
+    """毎月の支払日 = 入会日の「日」。年月を指定。"""
+    try:
+        d = datetime.strptime(joined_at_str.strip().split(' ')[0], '%Y/%m/%d')
+        from calendar import monthrange
+        last_day = monthrange(year, month)[1]
+        return datetime(year, month, min(d.day, last_day)).date()
+    except:
+        return None
+
+def _is_paid(paid_months_str, year, month):
+    key = f"{year:04d}-{month:02d}"
+    return key in [m.strip() for m in str(paid_months_str).split(',') if m.strip()]
+
+def _set_paid(paid_months_str, year, month, paid):
+    key = f"{year:04d}-{month:02d}"
+    months = [m.strip() for m in str(paid_months_str).split(',') if m.strip()]
+    if paid and key not in months:
+        months.append(key)
+    elif not paid and key in months:
+        months = [m for m in months if m != key]
+    return ','.join(sorted(months))
+
+
+# ==========================================
 #   ページ: 担当ユーザー一覧（営業者用）
 # ==========================================
 def _is_expired(valid_until_str):
@@ -572,19 +625,25 @@ def show_assigned_users(users_df, current_uid):
             status = "継続中"
 
         joined_at_raw = str(u.get('joined_at', '')).strip()
-        billing_day = None
-        try:
-            billing_day = datetime.strptime(joined_at_raw.split(' ')[0], '%Y/%m/%d').day
-        except:
-            pass
         today = datetime.now().date()
+        now = datetime.now()
         commission = SALES_COMMISSION.get(plan_id, 0)
+        due_date = _payment_due_date(joined_at_raw, now.year, now.month)
+        paid_months_str = str(u.get('paid_months', ''))
+        is_paid = _is_paid(paid_months_str, now.year, now.month)
+
         if status in ['退会済', '⚫ 無効']:
             commission_str = '-'
-        elif billing_day and today.day >= billing_day:
-            commission_str = f"¥{commission:,} ✓"
+            payment_status = '-'
+        elif is_paid:
+            commission_str = f"¥{commission:,}"
+            payment_status = '✅ 支払済'
+        elif due_date and today >= due_date:
+            commission_str = f"¥{commission:,}"
+            payment_status = '⏳ 支払待ち'
         else:
             commission_str = f"¥{commission:,}"
+            payment_status = f"📅 {due_date.strftime('%m/%d')}予定" if due_date else '-'
 
         rows.append({
             'ユーザー名': str(u.get('ユーザー名', '')),
@@ -594,26 +653,36 @@ def show_assigned_users(users_df, current_uid):
             '有効期限': valid_until.split(' ')[0] if valid_until and valid_until not in ['nan', 'None', ''] else '継続中',
             'ステータス': status,
             '今月入金額': commission_str,
+            '支払状況': payment_status,
         })
 
     df = pd.DataFrame(rows)
     active_count = len([r for r in rows if r['ステータス'] == '継続中'])
-    confirmed_total = sum(
+    now = datetime.now()
+    paid_total = sum(
         SALES_COMMISSION.get(str(u.get('plan_id', '')), 0)
         for _, u in assigned.iterrows()
-        if str(u.get('role', '')) not in ['disabled']
+        if _is_paid(str(u.get('paid_months', '')), now.year, now.month)
+    )
+    pending_total = sum(
+        SALES_COMMISSION.get(str(u.get('plan_id', '')), 0)
+        for _, u in assigned.iterrows()
+        if str(u.get('role', '')) != 'disabled'
         and not (str(u.get('valid_until', '')).strip() not in ['', 'nan', 'None'] and
                  _is_expired(str(u.get('valid_until', ''))))
-        and _billing_confirmed(str(u.get('joined_at', '')))
+        and not _is_paid(str(u.get('paid_months', '')), now.year, now.month)
     )
 
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
     c1.metric("担当ユーザー数", f"{len(df)}人（継続中 {active_count}人）")
-    c2.metric(f"{datetime.now().month}月 確認済入金合計", f"¥{confirmed_total:,}")
+    c2.metric(f"{now.month}月 支払済合計", f"¥{paid_total:,}")
+    c3.metric(f"{now.month}月 未払い", f"¥{pending_total:,}")
 
     def highlight_status(row):
         if row.get('ステータス') in ['退会済', '⚫ 無効']:
             return ['background-color: #fff3cd'] * len(row)
+        if row.get('支払状況') == '✅ 支払済':
+            return ['background-color: #d4edda'] * len(row)
         return [''] * len(row)
 
     st.dataframe(df.style.apply(highlight_status, axis=1), use_container_width=True, hide_index=True)
