@@ -164,6 +164,8 @@ def login_admin(client, login_input, password):
     """管理者・営業者のログイン"""
     try:
         ws = client.open_by_key(SPREADSHEET_ID).worksheet(USERS_SHEET_NAME)
+        headers = ws.row_values(1)
+        def col(name): return headers.index(name) if name in headers else USER_COLS.index(name)
         row_num = _find_user_row_num(ws, login_input)
         if not row_num:
             name_col = ws.col_values(2)
@@ -174,15 +176,15 @@ def login_admin(client, login_input, password):
         if not row_num:
             return False, "IDまたはパスワードが違います", "", "", "", ""
         row_values = ws.row_values(row_num)
-        while len(row_values) < len(USER_COLS):
+        while len(row_values) < len(headers):
             row_values.append("")
-        if row_values[2] != hash_password(password):
+        if row_values[col('パスワードハッシュ')] != hash_password(password):
             return False, "IDまたはパスワードが違います", "", "", "", ""
-        role = row_values[14] if row_values[14] else "user"
+        role = row_values[col('role')] if row_values[col('role')] else "user"
         if role not in ['admin', 'sales']:
             return False, "このアカウントには管理者パネルへのアクセス権がありません", "", "", "", ""
-        force_pw = row_values[17]
-        return True, "成功", row_values[0], row_values[1], role, force_pw
+        force_pw = row_values[col('force_pw_change')] if col('force_pw_change') < len(row_values) else ""
+        return True, "成功", row_values[col('ユーザーID')], row_values[col('ユーザー名')], role, force_pw
     except:
         return False, "ログイン処理エラー", "", "", "", ""
 
