@@ -33,28 +33,29 @@ MACHINES = ["machine_1", "machine_2"]
 
 PLANS = {
     "full": {
-        "name": "フルプラン (全て)",
-        "base_id": "price_1TZw2rRuq87ZH1shVVdNkhXn", "opt_id": "price_1TZw26Ruq87ZH1shxQJwa4OA",
-        "base_plan_id": "plan_9000", "opt_plan_id": "plan_11000"
+        "name": "プラン",
+        "base_id": "price_1Tdgw1Ruq87ZH1sh4qTM8XlI", "opt_id": "price_1TdgvLRuq87ZH1sh6uoD4lCA",
+        "base_plan_id": "plan_10000", "opt_plan_id": "plan_12000"
     },
-    "light": {
-        "name": "ライトプラン (片方のみ)",
-        "base_id": "price_1TZw5qRuq87ZH1shCHiJxTif", "opt_id": "price_1TZw3tRuq87ZH1shTbNIco8T",
-        "base_plan_id": "plan_5000", "opt_plan_id": "plan_7000"
-    }
 }
 
+# 営業者コミッション: ベース金額の50%（OPT分は含まない）
 SALES_COMMISSION = {
+    # 新プラン (¥10,000 / +OPT ¥12,000)
+    "plan_10000": 5000, "plan_12000": 5000,
+    # 旧プラン（既存ユーザー保持）
     "plan_9000": 4500, "plan_11000": 4500,
     "plan_5000": 2500, "plan_7000": 2500,
 }
 PLAN_DISPLAY_PRICE = {
+    "plan_10000": 10000, "plan_12000": 12000,
     "plan_9000": 9000, "plan_11000": 11000,
     "plan_5000": 5000, "plan_7000": 7000,
 }
 PLAN_DISPLAY_NAME = {
-    "plan_9000": "フル ¥9,000", "plan_11000": "フル+OPT ¥11,000",
-    "plan_5000": "ライト ¥5,000", "plan_7000": "ライト+OPT ¥7,000",
+    "plan_10000": "プラン ¥10,000", "plan_12000": "プラン+OPT ¥12,000",
+    "plan_9000": "プラン ¥9,000 (旧)", "plan_11000": "プラン+OPT ¥11,000 (旧)",
+    "plan_5000": "ライト ¥5,000 (旧)", "plan_7000": "ライト+OPT ¥7,000 (旧)",
 }
 
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
@@ -433,23 +434,11 @@ def show_user_management(client, users_df):
 
                 with col_c:
                     st.write("**プラン変更**")
-                    plan_keys = list(PLANS.keys())
-                    cur_pk = "full"
-                    for k, v in PLANS.items():
-                        if plan_id in [v['base_plan_id'], v['opt_plan_id']]:
-                            cur_pk = k; break
-                    new_pk = st.selectbox("プラン", plan_keys, format_func=lambda x: PLANS[x]['name'],
-                                          index=plan_keys.index(cur_pk), key=f"plan_{uid}", label_visibility="collapsed")
-                    use_opt = st.checkbox("OPT付き", key=f"opt_{uid}",
-                                          value=(plan_id in ["plan_11000", "plan_7000"]))
-                    if new_pk == "light":
-                        ro_opts = ["apparel", "not_apparel"]
-                        ro_labels = {"apparel": "アパレル", "not_apparel": "その他"}
-                        cur_ro = plan_type if plan_type in ro_opts else "apparel"
-                        new_ro = st.selectbox("カテゴリ", ro_opts, format_func=lambda x: ro_labels[x],
-                                              index=ro_opts.index(cur_ro), key=f"ro_{uid}", label_visibility="collapsed")
-                    else:
-                        new_ro = "all"
+                    st.caption("プラン: ¥10,000")
+                    use_opt = st.checkbox("OPT付き (+¥2,000)", key=f"opt_{uid}",
+                                          value=(plan_id in ["plan_12000", "plan_11000", "plan_7000"]))
+                    new_pk = "full"
+                    new_ro = "all"
                     if st.button("プラン変更", key=f"plan_btn_{uid}"):
                         ok, msg = admin_force_change_plan(client, uid, sub_id, new_pk, use_opt, new_ro)
                         if ok: st.success(msg); st.rerun()
