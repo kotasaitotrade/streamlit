@@ -45,6 +45,16 @@ PLANS = {
         "base_plan_id": "plan_10000", "opt_plan_id": "plan_12000"
     },
 }
+
+# 既存ユーザー含む全プラン表示用（ユーザー向けに「(旧)」表記なし）
+PLAN_USER_LABEL = {
+    "plan_10000": ("プラン", 10000),
+    "plan_12000": ("プラン + キーワード通知オプション", 12000),
+    "plan_9000":  ("プラン", 9000),
+    "plan_11000": ("プラン + キーワード通知オプション", 11000),
+    "plan_5000":  ("ライトプラン", 5000),
+    "plan_7000":  ("ライトプラン + キーワード通知オプション", 7000),
+}
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 
 # 管理者アプリと共有する列定義（順番を変えないこと）
@@ -513,6 +523,18 @@ def main():
                     st.rerun()
                 else: st.error(msg)
         with tab2:
+            st.markdown(f"""
+**💴 料金プラン**
+
+| プラン | 月額 |
+|---|---|
+| プラン | **¥{PLANS['full']['base_price']:,}/月** |
+| + キーワード通知オプション | **+¥{OPTION_PRICE:,}/月** |
+
+※ 登録は無料です。プラン契約はログイン後に「プラン契約・解約」メニューから行えます。
+※ いつでも解約可能、契約期間終了日までサービスをご利用いただけます。
+""")
+            st.divider()
             ri, rn, rp = st.text_input("Discord ID", key="ri"), st.text_input("表示名", key="rn"), st.text_input("パスワード", type="password", key="rp")
             if st.button("登録"):
                 if not ri or not rn or not rp: st.error("入力不足")
@@ -669,7 +691,16 @@ def main():
     elif menu == "プラン契約・解約":
         st.subheader("💳 サブスクリプション管理")
         if has_active_sub:
-            st.success("✅ **現在プラン契約中です**")
+            # 現在のプラン情報を表示
+            plan_label, plan_price = PLAN_USER_LABEL.get(current_plan_id, ("プラン", 0))
+            if plan_price > 0:
+                st.success(f"✅ **現在プラン契約中**")
+                pc1, pc2 = st.columns(2)
+                pc1.metric("ご契約プラン", plan_label)
+                pc2.metric("月額", f"¥{plan_price:,}")
+            else:
+                st.success("✅ **現在プラン契約中です**")
+            st.caption("💡 解約しても契約期間終了日までサービスは継続してご利用いただけます。")
             if st.button("プランを解約する"):
                 suc, msg = cancel_stripe_subscription_at_period_end(sub_id)
                 if suc: update_user_stripe_data(client, uid, subscription_id="", valid_until=datetime.now().strftime('%Y/%m/%d') if msg == "ALREADY_CANCELED" else msg); st.rerun()
