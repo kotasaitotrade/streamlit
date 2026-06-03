@@ -320,6 +320,57 @@
     <p>プランとオプションを選択後、「<strong>お支払い画面へ進む</strong>」をクリックしてStripeの決済ページで支払いを完了してください。</p>
   </section>
 
+  <!-- ========== sedori クロスセル セクション (デフォルト hidden) ========== -->
+  <!-- 公開タイミングで data-sedori-enabled を "true" に変えるか、CSS .sedori-section の display を変える -->
+  <section class="step-card sedori-section" id="step-sedori" data-sedori-enabled="false" style="display:none;">
+    <div class="step-header">
+      <div class="step-num">＋</div>
+      <h2>🛒 せどりツール (メルカリ / ヤフフリ)</h2>
+    </div>
+    <p>
+      EC新着通知をお使いの方向けに、<strong>メルカリ・ヤフフリ専用の業務効率化ツール</strong>もご用意しています。
+      EC新着で見つけた商品の市場価格をメルカリでチェックし、自動値下げで効率出品まで一気通貫の運用が可能になります。
+    </p>
+
+    <p><strong>料金プラン</strong></p>
+    <table>
+      <tr><th>プラン</th><th>月額</th><th>含まれる機能</th></tr>
+      <tr>
+        <td>メルカリ/ヤフフリ 新着通知 単品</td>
+        <td><span class="price-badge">¥5,000/月</span></td>
+        <td>新着検出 → Discord 即通知</td>
+      </tr>
+      <tr>
+        <td>メルカリ/ヤフフリ 自動値下げ 単品</td>
+        <td><span class="price-badge">¥5,000/月</span></td>
+        <td>3時間ごとの自動値下げ / 希少品・無反応特例</td>
+      </tr>
+      <tr>
+        <td><strong>せどりフルセット</strong></td>
+        <td><span class="price-badge">¥8,000/月</span></td>
+        <td>新着 + 自動値下げ 全部入り</td>
+      </tr>
+      <tr style="background:#fffbea;">
+        <td><strong>🌟 全部入り (EC + せどり)</strong></td>
+        <td><span class="price-badge">¥20,000/月</span></td>
+        <td>EC新着通知 + せどり全機能。プロ業者向け最強プラン</td>
+      </tr>
+    </table>
+
+    <div class="warn-box" style="background:#e8f5ff;border-color:#90c5ff;">
+      💡 <strong>EC契約者様への特典</strong>：既存EC新着のサブスクと並行して追加契約できます。
+      ログイン後の「プラン契約・解約」メニューに専用バナーが表示されます。
+    </div>
+
+    <p><strong>主な機能</strong></p>
+    <ul style="line-height:1.8;">
+      <li><strong>📉 自動値下げ</strong>：稼働時間帯を指定し、出品中商品を3時間ごとに自動値下げ。希少品特例 / いいね無反応時の追加値下げに対応</li>
+      <li><strong>🔍 新着通知</strong>：型番・URL・必須/除外ワード・価格上限を CSV で柔軟に設定。検索ワード×金額 ルールを最大5つ組み合わせ可能</li>
+      <li><strong>🛡️ Bot 検知対策</strong>：Playwright stealth プラグインで実ブラウザを内部利用し、長時間稼働でもアクセスブロックされにくい設計</li>
+      <li><strong>💬 Discord 通知</strong>：ツールごとに異なるチャンネルへ通知を分岐可能</li>
+    </ul>
+  </section>
+
   <!-- STEP 5 -->
   <section class="step-card" id="step5">
     <div class="step-header">
