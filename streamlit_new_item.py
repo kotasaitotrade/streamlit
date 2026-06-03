@@ -46,6 +46,60 @@ PLANS = {
     },
 }
 
+# ==========================================
+#   sedori ツール (メルカリ/ヤフフリ) クロスセル
+#   feature flag: st.secrets.sedori.enabled or env ENABLE_SEDORI
+#   - false (default) → 一切表示せず、既存ユーザーには見えない
+#   - true            → プラン契約UIに「せどりツール」セクションが追加表示
+# ==========================================
+try:
+    ENABLE_SEDORI = bool(st.secrets.get("sedori", {}).get("enabled", False))
+except Exception:
+    ENABLE_SEDORI = os.environ.get("ENABLE_SEDORI", "false").lower() == "true"
+
+# Stripe price ID は本番作成後に Secrets で上書き可能
+# (st.secrets.sedori.price_id_pricedown 等を最優先で参照する)
+def _sec_price(key: str, default: str = "") -> str:
+    try:
+        return st.secrets.get("sedori", {}).get(key, default) or default
+    except Exception:
+        return default
+
+SEDORI_PLANS = {
+    "pricedown": {
+        "name": "メルカリ/ヤフフリ 自動値下げ単品",
+        "desc": "出品中の商品を時間帯ごとに自動値下げ。Discordで結果通知。",
+        "price": 5000,
+        "stripe_price_id": _sec_price("price_id_pricedown", "price_REPLACE_SEDORI_PRICEDOWN"),
+        "plan_id": "plan_sedori_pricedown_5000",
+        "allowed_tools": [3, 4],
+    },
+    "arrival": {
+        "name": "メルカリ/ヤフフリ 新着通知単品",
+        "desc": "メルカリ・ヤフフリの新着出品を即Discord通知。",
+        "price": 5000,
+        "stripe_price_id": _sec_price("price_id_arrival", "price_REPLACE_SEDORI_ARRIVAL"),
+        "plan_id": "plan_sedori_arrival_5000",
+        "allowed_tools": [1, 2],
+    },
+    "sedori_full": {
+        "name": "せどりツール フルセット",
+        "desc": "新着通知 + 自動値下げ の全部入り。",
+        "price": 8000,
+        "stripe_price_id": _sec_price("price_id_sedori_full", "price_REPLACE_SEDORI_FULL"),
+        "plan_id": "plan_sedori_full_8000",
+        "allowed_tools": [1, 2, 3, 4],
+    },
+    "all_full": {
+        "name": "全部入り（EC + せどり）",
+        "desc": "EC新着監視 + せどり全機能。プロ業者向け。",
+        "price": 20000,
+        "stripe_price_id": _sec_price("price_id_all_full", "price_REPLACE_ALL_FULL"),
+        "plan_id": "plan_all_full_20000",
+        "allowed_tools": [1, 2, 3, 4, 5],
+    },
+}
+
 # 既存ユーザー含む全プラン表示用（ユーザー向けに「(旧)」表記なし）
 PLAN_USER_LABEL = {
     "plan_10000": ("プラン", 10000),
@@ -704,6 +758,31 @@ def main():
             if st.button("プランを解約する"):
                 suc, msg = cancel_stripe_subscription_at_period_end(sub_id)
                 if suc: update_user_stripe_data(client, uid, subscription_id="", valid_until=datetime.now().strftime('%Y/%m/%d') if msg == "ALREADY_CANCELED" else msg); st.rerun()
+
+            # --- sedori クロスセル (既存契約中ユーザー向け) ---
+            if ENABLE_SEDORI:
+                st.divider()
+                st.markdown("### 🛒 せどりツールも追加できます")
+                st.markdown(
+                    "**メルカリ / ヤフフリ専用のせどり業務効率化ツール** を別途追加でご利用いただけます。\n\n"
+                    "- 📉 **自動値下げ**：出品中の商品を3時間ごとに自動値下げ。希少品やいいね無反応特例も搭載\n"
+                    "- 🔍 **新着通知**：指定の型番・キーワードでメルカリ/ヤフフリの新着商品をDiscord即通知\n"
+                    "- 🤝 **連携活用**：EC新着で見つけた商品の市場価格をメルカリでチェック→自動値下げ出品まで一気通貫"
+                )
+                up_col1, up_col2, up_col3 = st.columns(3)
+                for col, key in zip([up_col1, up_col2, up_col3], ["pricedown", "arrival", "sedori_full"]):
+                    p = SEDORI_PLANS[key]
+                    with col:
+                        st.markdown(f"**{p['name']}**")
+                        st.caption(p["desc"])
+                        st.metric("月額（追加分）", f"¥{p['price']:,}")
+                        if st.button(f"このプランを追加", key=f"upsell_{key}"):
+                            suc, url = create_stripe_checkout_session(uid, p["stripe_price_id"])
+                            if suc:
+                                st.link_button("お支払い画面へ進む", url, type="primary")
+                            else:
+                                st.error(f"Stripe 初期化エラー: {url}")
+                st.caption("💡 追加プランは現在のサブスクとは別契約になります。両方解約したい場合は順に解約してください。")
         else:
             plan_key = "full"
             st.info(f"**プラン** ¥{PLANS[plan_key]['base_price']:,}/月")

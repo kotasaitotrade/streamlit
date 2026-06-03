@@ -28,6 +28,21 @@ apply_theme()
 CREDENTIALS_PATH = 'google_credentials.json'
 TOKEN_PATH = 'gspread_token.json'
 SPREADSHEET_ID = "1Y8VEVn95FOp5ELLtBiuUrB9m4S3qDSiX50G6aB88vnk"
+
+# sedori ツール用 feature flag (streamlit_new_item.py と同じロード方式)
+try:
+    ENABLE_SEDORI = bool(st.secrets.get("sedori", {}).get("enabled", False))
+except Exception:
+    ENABLE_SEDORI = os.environ.get("ENABLE_SEDORI", "false").lower() == "true"
+
+# sedori 専用スプシ (license / plans / downloads)
+SEDORI_SPREADSHEET_ID = "1QNDhwNAowAL73dadzXeKZQV1VHvpPbz5Q_gXTj39fto"
+SEDORI_PLAN_IDS = {
+    "plan_sedori_pricedown_5000",
+    "plan_sedori_arrival_5000",
+    "plan_sedori_full_8000",
+    "plan_all_full_20000",
+}
 USERS_SHEET_NAME = "ユーザー管理"
 MACHINES = ["machine_1", "machine_2"]
 
@@ -877,6 +892,73 @@ def show_password_management(client, users_df):
 # ==========================================
 #   ページ: 強制パスワード変更
 # ==========================================
+def show_sedori_dashboard(client, users_df):
+    """せどりツール (メルカリ/ヤフフリ) 利用状況ダッシュボード。
+
+    ENABLE_SEDORI=true のときだけ表示される管理者向けタブ。
+    既存EC契約者のうち sedori 追加プランを取った人数や、別途sedoriサブシステム
+    (sedori-tool-package の GAS / スプシ) のライセンス発行数を可視化する。
+    """
+    st.title("🛒 せどりツール 利用状況")
+    st.caption("メルカリ/ヤフフリ 新着通知 + 自動値下げ サービスのクロスセル状況")
+
+    # --- 1. 既存EC契約者のうち sedori 追加プランを取った人数 ---
+    st.subheader("① 既存EC契約者の sedori アップセル状況")
+    if users_df is None or users_df.empty:
+        st.info("ユーザーデータがありません。")
+    else:
+        plan_col = "plan_id" if "plan_id" in users_df.columns else None
+        if plan_col is None:
+            st.warning("plan_id 列が見当たりません。")
+        else:
+            sedori_users = users_df[users_df[plan_col].astype(str).isin(SEDORI_PLAN_IDS)]
+            ec_users = users_df[users_df[plan_col].astype(str).str.startswith("plan_") & ~users_df[plan_col].astype(str).isin(SEDORI_PLAN_IDS)]
+            c1, c2, c3 = st.columns(3)
+            c1.metric("EC契約者数", len(ec_users))
+            c2.metric("sedori 契約者数", len(sedori_users))
+            ratio = (len(sedori_users) / max(1, len(ec_users))) * 100
+            c3.metric("クロスセル率", f"{ratio:.1f}%")
+
+            if len(sedori_users) > 0:
+                st.markdown("**sedori 契約中ユーザー一覧**")
+                disp_cols = [c for c in ["ユーザーID", "ユーザー名", plan_col, "joined_at", "valid_until"] if c in sedori_users.columns]
+                st.dataframe(sedori_users[disp_cols], use_container_width=True, hide_index=True)
+
+    # --- 2. sedori 専用 GAS スプシのライセンス情報 ---
+    st.subheader("② sedori ライセンス (専用GAS スプシ)")
+    st.caption(f"連携先: https://docs.google.com/spreadsheets/d/{SEDORI_SPREADSHEET_ID}/edit")
+    try:
+        sh = client.open_by_key(SEDORI_SPREADSHEET_ID)
+        try:
+            licenses_sheet = sh.worksheet("licenses")
+            records = licenses_sheet.get_all_records()
+            if records:
+                df = pd.DataFrame(records)
+                c1, c2, c3 = st.columns(3)
+                c1.metric("発行済ライセンス", len(df))
+                if "enabled" in df.columns:
+                    active = df[df["enabled"].astype(str).str.upper() == "TRUE"]
+                    c2.metric("有効ライセンス", len(active))
+                if "plan" in df.columns:
+                    pro_count = len(df[df["plan"].astype(str) == "Pro"])
+                    c3.metric("Proプラン", pro_count)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                st.info("ライセンス未発行")
+        except gspread.exceptions.WorksheetNotFound:
+            st.warning("`licenses` シートが見つかりません。GAS_セットアップ手順.md を確認してください。")
+    except Exception as e:
+        st.error(f"sedori スプシ参照エラー: {e}")
+
+    # --- 3. クロスセル運用ガイド ---
+    st.subheader("③ クロスセル運用のヒント")
+    st.markdown(
+        "- EC契約者で sedori 未契約者には streamlit_new_item.py 側にバナーが表示されています\n"
+        "- 月次ミーティングで「sedori 契約者数」が伸びていない場合は、ランディングや EC ユーザー向けメール campaign を検討\n"
+        "- 解約者の sedori 利用状況を見ることで「sedoriを使った人は継続率が高い」かどうか分析できます"
+    )
+
+
 def show_force_password_change(client, uid):
     st.title("🔐 パスワードの変更が必要です")
     st.warning("管理者によってパスワードの変更が要求されています。新しいパスワードを設定してください。")
@@ -952,6 +1034,8 @@ def main():
         menu_options = ["担当ユーザー", "月額料金参照"]
         if role == 'admin':
             menu_options = ["ユーザー管理", "月額料金参照", "パスワード管理"]
+        if ENABLE_SEDORI:
+            menu_options.append("せどりツール利用状況")
 
         menu = st.radio("メニュー", menu_options)
         st.divider()
@@ -969,6 +1053,8 @@ def main():
         show_monthly_fee(client, users_df, uid, role)
     elif menu == "パスワード管理" and role == 'admin':
         show_password_management(client, users_df)
+    elif menu == "せどりツール利用状況" and ENABLE_SEDORI:
+        show_sedori_dashboard(client, users_df)
 
 
 if __name__ == "__main__":
