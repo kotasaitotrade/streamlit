@@ -462,5 +462,29 @@
   運営：revolt shop &nbsp;|&nbsp; お問い合わせ：koutaiwi@gmail.com
 </footer>
 
+<script>
+// sedori セクションを URL クエリ ?sedori=preview で一時表示する仕組み
+// 本番公開時は HTML 側の style="display:none;" を削除すれば常時表示。
+(function() {
+  try {
+    var params = new URLSearchParams(window.location.search);
+    var key = params.get('sedori');
+    if (key === 'preview' || key === '1') {
+      var els = document.querySelectorAll('.sedori-section');
+      for (var i = 0; i < els.length; i++) {
+        els[i].style.display = '';
+        els[i].setAttribute('data-sedori-enabled', 'true');
+      }
+      // 上部に「プレビューモード」表示
+      var banner = document.createElement('div');
+      banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#fff3cd;border-bottom:2px solid #ffc107;padding:6px 12px;text-align:center;font-size:13px;z-index:9999;';
+      banner.innerHTML = '🛠️ <strong>sedori セクション プレビューモード</strong> (URL ?sedori=preview)。本番公開時は HTML の display:none を外してください。';
+      document.body.insertBefore(banner, document.body.firstChild);
+      document.body.style.paddingTop = '36px';
+    }
+  } catch (e) {}
+})();
+</script>
+
 </body>
 </html>
