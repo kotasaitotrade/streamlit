@@ -70,7 +70,7 @@ SEDORI_PLANS = {
         "name": "メルカリ/ヤフフリ 自動値下げ単品",
         "desc": "出品中の商品を時間帯ごとに自動値下げ。Discordで結果通知。",
         "price": 5000,
-        "stripe_price_id": _sec_price("price_id_pricedown", "price_REPLACE_SEDORI_PRICEDOWN"),
+        "stripe_price_id": _sec_price("price_id_pricedown", "price_1Te5KnRuq87ZH1shI8MI1csP"),
         "plan_id": "plan_sedori_pricedown_5000",
         "allowed_tools": [3, 4],
     },
@@ -78,23 +78,15 @@ SEDORI_PLANS = {
         "name": "メルカリ/ヤフフリ 新着通知単品",
         "desc": "メルカリ・ヤフフリの新着出品を即Discord通知。",
         "price": 5000,
-        "stripe_price_id": _sec_price("price_id_arrival", "price_REPLACE_SEDORI_ARRIVAL"),
+        "stripe_price_id": _sec_price("price_id_arrival", "price_1Te5LVRuq87ZH1sh5SzpTxyc"),
         "plan_id": "plan_sedori_arrival_5000",
         "allowed_tools": [1, 2],
-    },
-    "sedori_full": {
-        "name": "せどりツール フルセット",
-        "desc": "新着通知 + 自動値下げ の全部入り。",
-        "price": 8000,
-        "stripe_price_id": _sec_price("price_id_sedori_full", "price_REPLACE_SEDORI_FULL"),
-        "plan_id": "plan_sedori_full_8000",
-        "allowed_tools": [1, 2, 3, 4],
     },
     "all_full": {
         "name": "全部入り（EC + せどり）",
         "desc": "EC新着監視 + せどり全機能。プロ業者向け。",
         "price": 20000,
-        "stripe_price_id": _sec_price("price_id_all_full", "price_REPLACE_ALL_FULL"),
+        "stripe_price_id": _sec_price("price_id_all_full", "price_1Te5MCRuq87ZH1shtl4EfFBy"),
         "plan_id": "plan_all_full_20000",
         "allowed_tools": [1, 2, 3, 4, 5],
     },
@@ -770,7 +762,7 @@ def main():
                     "- 🤝 **連携活用**：EC新着で見つけた商品の市場価格をメルカリでチェック→自動値下げ出品まで一気通貫"
                 )
                 up_col1, up_col2, up_col3 = st.columns(3)
-                for col, key in zip([up_col1, up_col2, up_col3], ["pricedown", "arrival", "sedori_full"]):
+                for col, key in zip([up_col1, up_col2, up_col3], ["pricedown", "arrival", "all_full"]):
                     p = SEDORI_PLANS[key]
                     with col:
                         st.markdown(f"**{p['name']}**")

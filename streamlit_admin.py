@@ -40,7 +40,6 @@ SEDORI_SPREADSHEET_ID = "1QNDhwNAowAL73dadzXeKZQV1VHvpPbz5Q_gXTj39fto"
 SEDORI_PLAN_IDS = {
     "plan_sedori_pricedown_5000",
     "plan_sedori_arrival_5000",
-    "plan_sedori_full_8000",
     "plan_all_full_20000",
 }
 USERS_SHEET_NAME = "ユーザー管理"
