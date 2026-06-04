@@ -3,6 +3,7 @@ import pandas as pd
 import gspread
 import os
 import hashlib
+import hmac
 import json
 import time
 import uuid
@@ -17,6 +18,7 @@ from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from gspread.exceptions import APIError
+import extra_streamlit_components as stx
 
 st.set_page_config(page_title="ツウチマネージャー", layout="wide", page_icon="🜨")
 
@@ -85,9 +87,9 @@ SEDORI_PLANS = {
     "all_full": {
         "name": "全部入り（EC + せどり）",
         "desc": "EC新着監視 + せどり全機能。プロ業者向け。",
-        "price": 20000,
-        "stripe_price_id": _sec_price("price_id_all_full", "price_1Te5MCRuq87ZH1shtl4EfFBy"),
-        "plan_id": "plan_all_full_20000",
+        "price": 28000,
+        "stripe_price_id": _sec_price("price_id_all_full", "price_1TedD7Ruq87ZH1shpjAAfF3T"),
+        "plan_id": "plan_all_full_28000",
         "allowed_tools": [1, 2, 3, 4, 5],
     },
 }
@@ -222,6 +224,55 @@ def change_stripe_subscription_plan(subscription_id, new_price_id):
         stripe.Subscription.modify(subscription_id, items=[{'id': item_id, 'price': new_price_id}])
         return True, "プランを変更しました"
     except Exception as e: return False, str(e)
+
+# ==========================================
+#   セッションcookie (3時間ログイン維持)
+# ==========================================
+_SESSION_HOURS = 3
+_COOKIE_NAME = "ntm_session"
+
+def _cookie_secret():
+    try:
+        return str(st.secrets.get("cookie_secret", "ntm-default-secret-2026"))
+    except Exception:
+        return "ntm-default-secret-2026"
+
+@st.cache_resource
+def get_cookie_manager():
+    return stx.CookieManager()
+
+def session_cookie_set(cookie_mgr, user_id, user_name):
+    expiry = int(time.time()) + _SESSION_HOURS * 3600
+    payload = f"{user_id}|{user_name}|{expiry}"
+    sig = hmac.new(_cookie_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()[:24]
+    cookie_mgr.set(_COOKIE_NAME, f"{payload}|{sig}",
+                   expires_at=datetime.now() + timedelta(hours=_SESSION_HOURS))
+
+def session_cookie_get(cookie_mgr):
+    try:
+        val = cookie_mgr.get(_COOKIE_NAME)
+        if not val:
+            return None, None
+        *parts, sig = val.split("|")
+        if len(parts) != 3:
+            return None, None
+        payload = "|".join(parts)
+        expected = hmac.new(_cookie_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()[:24]
+        if not hmac.compare_digest(sig, expected):
+            return None, None
+        user_id, user_name, expiry = parts
+        if int(time.time()) > int(expiry):
+            return None, None
+        return user_id, user_name
+    except Exception:
+        return None, None
+
+def session_cookie_clear(cookie_mgr):
+    try:
+        cookie_mgr.delete(_COOKIE_NAME)
+    except Exception:
+        pass
+
 
 # ==========================================
 #   ユーザー管理・DB操作
@@ -546,13 +597,24 @@ def main():
                 add_initial_notification_settings(client, target_uid, saved_restriction)
                 st.success("🎉 お支払いが完了しました！"); time.sleep(3); st.query_params.clear()
                 st.session_state['logged_in_user_id'] = target_uid
+                cookie_mgr = get_cookie_manager()
+                session_cookie_set(cookie_mgr, target_uid, target_uid)
                 st.rerun()
         st.stop()
 
     ensure_user_sheet_headers(client)
 
+    cookie_mgr = get_cookie_manager()
+
     if 'logged_in_user_id' not in st.session_state: st.session_state['logged_in_user_id'] = None
     if 'force_pw_change' not in st.session_state: st.session_state['force_pw_change'] = False
+
+    # cookieから自動ログイン復元
+    if st.session_state['logged_in_user_id'] is None:
+        uid_c, uname_c = session_cookie_get(cookie_mgr)
+        if uid_c:
+            st.session_state['logged_in_user_id'] = uid_c
+            st.session_state['logged_in_user_name'] = uname_c
 
     if st.session_state['logged_in_user_id'] is None:
         st.markdown("## 📊 ツウチマネージャー (市場リサーチツール)")
@@ -566,6 +628,7 @@ def main():
                     st.session_state['logged_in_user_id'] = uid
                     st.session_state['logged_in_user_name'] = uname
                     st.session_state['force_pw_change'] = (force_pw == "1")
+                    session_cookie_set(cookie_mgr, uid, uname)
                     st.rerun()
                 else: st.error(msg)
         with tab2:
@@ -635,7 +698,10 @@ def main():
     with st.sidebar:
         st.write(f"User: **{st.session_state.get('logged_in_user_name','')}**")
         menu = st.radio("メニュー", ["通知設定", "プラン契約・解約", "アカウント設定"])
-        if st.button("ログアウト"): st.session_state['logged_in_user_id'] = None; st.rerun()
+        if st.button("ログアウト"):
+            session_cookie_clear(cookie_mgr)
+            st.session_state['logged_in_user_id'] = None
+            st.rerun()
 
     full_df = load_data(client)
 

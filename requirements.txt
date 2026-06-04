@@ -8,3 +8,4 @@ pyotp
 qrcode
 pillow
 stripe
+extra-streamlit-components
