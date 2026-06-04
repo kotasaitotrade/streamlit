@@ -262,6 +262,138 @@ def session_delete(token):
 
 
 # ==========================================
+#   ステージング テスト用バイパス
+#   secrets に [staging] bypass_password が設定されている場合のみ有効。
+#   パスワードを入力するとテスト用ライセンスが発行されダウンロードをテストできる。
+# ==========================================
+
+@st.cache_resource
+def _staging_lock():
+    return {"attempts": 0, "locked_until": None, "permanent": False}
+
+def _staging_get_bypass_pw():
+    try:
+        return str(st.secrets.get("staging", {}).get("bypass_password", ""))
+    except Exception:
+        return ""
+
+def staging_check_lock():
+    s = _staging_lock()
+    if s["permanent"]:
+        return False, "永久ロック（管理者に連絡してください）"
+    if s["locked_until"] and datetime.now() < s["locked_until"]:
+        rem = s["locked_until"] - datetime.now()
+        mins = max(1, int(rem.total_seconds() // 60))
+        unit = "時間" if mins >= 60 else "分"
+        val = mins // 60 if mins >= 60 else mins
+        return False, f"ロック中（残り約 {val} {unit}）"
+    return True, None
+
+def staging_record_attempt(success: bool):
+    s = _staging_lock()
+    if success:
+        s["attempts"] = 0
+        s["locked_until"] = None
+        return
+    s["attempts"] += 1
+    n = s["attempts"]
+    now = datetime.now()
+    if n >= 10:
+        s["permanent"] = True
+    elif n >= 7:
+        s["locked_until"] = now + timedelta(hours=24)
+    elif n >= 3:
+        s["locked_until"] = now + timedelta(hours=1)
+
+def staging_issue_license():
+    import urllib.request as _ur, json as _json, time as _time
+    GAS = "https://script.google.com/macros/s/AKfycbxjEVCUfkrd7W0MDu8spRrw88g7qyoS8tT7Q2pUt3zCbfn8txxoqtcDrS_QCY6PfUs/exec"
+    ts = int(_time.time())
+    body = _json.dumps({"type": "invoice.payment_succeeded", "data": {"object": {
+        "customer_email": f"staging-{ts}@staging.test",
+        "customer": f"cus_stg_{ts}",
+        "subscription": f"sub_stg_{ts}",
+        "lines": {"data": [{"price": {"id": "price_1TedD7Ruq87ZH1shpjAAfF3T"}}]},
+    }}}).encode()
+    req = _ur.Request(GAS, data=body, headers={"Content-Type": "application/json"}, method="POST")
+    with _ur.urlopen(req, timeout=30) as r:
+        return _json.loads(r.read())
+
+def staging_get_download_url(license_key: str, os_type: str = "windows"):
+    import urllib.request as _ur, json as _json, urllib.parse as _up
+    GAS = "https://script.google.com/macros/s/AKfycbxjEVCUfkrd7W0MDu8spRrw88g7qyoS8tT7Q2pUt3zCbfn8txxoqtcDrS_QCY6PfUs/exec"
+    url = f"{GAS}?action=download&key={_up.quote(license_key)}&os={os_type}"
+    with _ur.urlopen(url, timeout=30) as r:
+        return _json.loads(r.read())
+
+def staging_show_bypass(login_tab_container):
+    """ログイン画面内のステージングバイパスUIを描画する。"""
+    bypass_pw = _staging_get_bypass_pw()
+    if not bypass_pw:
+        return  # 本番 or staging secrets未設定なら何も表示しない
+
+    login_tab_container.divider()
+    login_tab_container.markdown("#### 🧪 ステージング テスト用ライセンス発行")
+
+    can_try, lock_msg = staging_check_lock()
+    s = _staging_lock()
+    attempts = s["attempts"]
+
+    if not can_try:
+        login_tab_container.error(f"🔒 {lock_msg}")
+        return
+
+    if attempts > 0:
+        warn_map = {range(1,3): "⚠️", range(3,7): "🔒 まもなくロック", range(7,10): "🚨 あと少しで永久ロック"}
+        warn = next((v for r, v in warn_map.items() if attempts in r), "")
+        login_tab_container.caption(f"失敗: {attempts}回 {warn}")
+
+    test_pw = login_tab_container.text_input("テスト用パスワード", type="password", key="stg_bypass_pw")
+
+    col1, col2 = login_tab_container.columns([1, 2])
+    if col1.button("テストライセンス発行", type="primary", key="stg_bypass_btn"):
+        if test_pw == bypass_pw:
+            staging_record_attempt(True)
+            with login_tab_container:
+                with st.spinner("ライセンス発行中..."):
+                    result = staging_issue_license()
+            if result.get("status") == "ok":
+                key = result["license_key"]
+                st.session_state["staging_license_key"] = key
+                st.session_state["staging_license_plan"] = result.get("plan", "")
+                st.rerun()
+            else:
+                login_tab_container.error(f"発行失敗: {result.get('message')}")
+        else:
+            staging_record_attempt(False)
+            s2 = _staging_lock()
+            n = s2["attempts"]
+            if s2["permanent"]:
+                login_tab_container.error("🔒 永久ロックされました（管理者に連絡）")
+            elif s2["locked_until"]:
+                h = 24 if n >= 7 else 1
+                login_tab_container.error(f"🔒 {h}時間ロックされました（{n}回失敗）")
+            else:
+                login_tab_container.error(f"❌ パスワードが違います（{n}回失敗 / 3回でロック）")
+
+    # 発行済みライセンスがある場合の表示
+    stg_key = st.session_state.get("staging_license_key")
+    if stg_key:
+        login_tab_container.success(f"✅ テストライセンス発行済み")
+        login_tab_container.code(stg_key)
+        login_tab_container.markdown(f"**プラン:** {st.session_state.get('staging_license_plan', '')}")
+
+        os_choice = col2.selectbox("OS", ["windows", "mac"], key="stg_os")
+        if login_tab_container.button("📥 ダウンロードURLを取得", key="stg_dl_btn"):
+            with st.spinner("確認中..."):
+                dl = staging_get_download_url(stg_key, os_choice)
+            if dl.get("status") == "ok":
+                login_tab_container.markdown(f"[⬇️ ダウンロード]({dl['download_url']})  (v{dl.get('version','')} / {dl.get('release_date','')})")
+            else:
+                login_tab_container.warning(f"ダウンロード: {dl.get('message')} （downloadsシートにexeが未登録の場合は正常）")
+
+
+# ==========================================
 #   ユーザー管理・DB操作
 # ==========================================
 def hash_password(password): return hashlib.sha256(str(password).encode('utf-8')).hexdigest()
@@ -623,6 +755,7 @@ def main():
                     st.query_params['t'] = token
                     st.rerun()
                 else: st.error(msg)
+            staging_show_bypass(st)
         with tab2:
             st.markdown(f"""
 **💴 料金プラン**
