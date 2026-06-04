@@ -84,12 +84,12 @@ SEDORI_PLANS = {
         "allowed_tools": [1, 2],
     },
     "all_full": {
-        "name": "全部入り（EC + せどり）",
-        "desc": "EC新着監視 + せどり全機能。プロ業者向け。",
-        "price": 28000,
+        "name": "せどりツールフルセット(値下げ+新着フリマ)",
+        "desc": "メルカリ・ヤフフリの自動値下げ＋新着通知がセットに。単品2つより2,000円お得。",
+        "price": 8000,
         "stripe_price_id": _sec_price("price_id_all_full", "price_1TedD7Ruq87ZH1shpjAAfF3T"),
-        "plan_id": "plan_all_full_28000",
-        "allowed_tools": [1, 2, 3, 4, 5],
+        "plan_id": "plan_all_full_8000",
+        "allowed_tools": [1, 2, 3, 4],
     },
 }
 
