@@ -306,17 +306,16 @@ def staging_record_attempt(success: bool):
         s["locked_until"] = now + timedelta(hours=1)
 
 def staging_issue_license():
-    import urllib.request as _ur, json as _json, time as _time
+    import urllib.request as _ur, json as _json, urllib.parse as _up
     GAS = "https://script.google.com/macros/s/AKfycbxjEVCUfkrd7W0MDu8spRrw88g7qyoS8tT7Q2pUt3zCbfn8txxoqtcDrS_QCY6PfUs/exec"
-    ts = int(_time.time())
-    body = _json.dumps({"type": "invoice.payment_succeeded", "data": {"object": {
-        "customer_email": f"staging-{ts}@staging.test",
-        "customer": f"cus_stg_{ts}",
-        "subscription": f"sub_stg_{ts}",
-        "lines": {"data": [{"price": {"id": "price_1TedD7Ruq87ZH1shpjAAfF3T"}}]},
-    }}}).encode()
-    req = _ur.Request(GAS, data=body, headers={"Content-Type": "application/json"}, method="POST")
-    with _ur.urlopen(req, timeout=30) as r:
+    try:
+        admin_token = str(st.secrets.get("staging", {}).get("admin_token", ""))
+    except Exception:
+        admin_token = ""
+    if not admin_token:
+        return {"status": "ng", "message": "staging.admin_token が Secrets に未設定"}
+    url = f"{GAS}?action=staging_issue&token={_up.quote(admin_token)}&plan=AllFull&email=staging%40staging.test"
+    with _ur.urlopen(url, timeout=30) as r:
         return _json.loads(r.read())
 
 def staging_get_download_url(license_key: str, os_type: str = "windows"):
