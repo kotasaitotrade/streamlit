@@ -326,71 +326,72 @@ def staging_get_download_url(license_key: str, os_type: str = "windows"):
     with _ur.urlopen(url, timeout=30) as r:
         return _json.loads(r.read())
 
-def staging_show_bypass(login_tab_container):
+def staging_show_bypass(container):
     """ログイン画面内のステージングバイパスUIを描画する。"""
     bypass_pw = _staging_get_bypass_pw()
     if not bypass_pw:
         return  # 本番 or staging secrets未設定なら何も表示しない
 
-    login_tab_container.divider()
-    login_tab_container.markdown("#### 🧪 ステージング テスト用ライセンス発行")
+    container.divider()
+    container.markdown("#### 🧪 ステージング テスト用ライセンス発行")
 
     can_try, lock_msg = staging_check_lock()
     s = _staging_lock()
     attempts = s["attempts"]
 
     if not can_try:
-        login_tab_container.error(f"🔒 {lock_msg}")
+        container.error(f"🔒 {lock_msg}")
         return
 
+    # 発行済みライセンスがある場合はそちらを優先表示
+    stg_key = st.session_state.get("staging_license_key")
+    if stg_key:
+        container.success("✅ テストライセンス発行済み")
+        container.code(stg_key)
+        container.markdown(f"**プラン:** {st.session_state.get('staging_license_plan', '')}")
+        os_choice = container.selectbox("OS", ["windows", "mac"], key="stg_os")
+        if container.button("📥 ダウンロードURLを取得", key="stg_dl_btn"):
+            with st.spinner("確認中..."):
+                dl = staging_get_download_url(stg_key, os_choice)
+            if dl.get("status") == "ok":
+                container.markdown(f"[⬇️ ダウンロード]({dl['download_url']})  (v{dl.get('version','')} / {dl.get('release_date','')})")
+            else:
+                container.warning(f"ダウンロード: {dl.get('message')} （downloadsシートにexeが未登録の場合は正常）")
+        if container.button("🔄 新しいライセンスを発行し直す", key="stg_reset_btn"):
+            st.session_state.pop("staging_license_key", None)
+            st.session_state.pop("staging_license_plan", None)
+            st.rerun()
+        return
+
+    # パスワード入力フォーム
     if attempts > 0:
-        warn_map = {range(1,3): "⚠️", range(3,7): "🔒 まもなくロック", range(7,10): "🚨 あと少しで永久ロック"}
-        warn = next((v for r, v in warn_map.items() if attempts in r), "")
-        login_tab_container.caption(f"失敗: {attempts}回 {warn}")
+        warn = "⚠️" if attempts < 3 else ("🔒 まもなくロック" if attempts < 7 else "🚨 あと少しで永久ロック")
+        container.caption(f"失敗: {attempts}回 {warn}")
 
-    test_pw = login_tab_container.text_input("テスト用パスワード", type="password", key="stg_bypass_pw")
+    test_pw = container.text_input("テスト用パスワード", type="password", key="stg_bypass_pw")
 
-    col1, col2 = login_tab_container.columns([1, 2])
-    if col1.button("テストライセンス発行", type="primary", key="stg_bypass_btn"):
+    if container.button("テストライセンス発行", type="primary", key="stg_bypass_btn"):
         if test_pw == bypass_pw:
             staging_record_attempt(True)
-            with login_tab_container:
-                with st.spinner("ライセンス発行中..."):
-                    result = staging_issue_license()
+            with st.spinner("ライセンス発行中..."):
+                result = staging_issue_license()
             if result.get("status") == "ok":
-                key = result["license_key"]
-                st.session_state["staging_license_key"] = key
+                st.session_state["staging_license_key"] = result["license_key"]
                 st.session_state["staging_license_plan"] = result.get("plan", "")
                 st.rerun()
             else:
-                login_tab_container.error(f"発行失敗: {result.get('message')}")
+                container.error(f"発行失敗: {result.get('message')}")
         else:
             staging_record_attempt(False)
             s2 = _staging_lock()
             n = s2["attempts"]
             if s2["permanent"]:
-                login_tab_container.error("🔒 永久ロックされました（管理者に連絡）")
+                container.error("🔒 永久ロックされました（管理者に連絡）")
             elif s2["locked_until"]:
                 h = 24 if n >= 7 else 1
-                login_tab_container.error(f"🔒 {h}時間ロックされました（{n}回失敗）")
+                container.error(f"🔒 {h}時間ロックされました（{n}回失敗）")
             else:
-                login_tab_container.error(f"❌ パスワードが違います（{n}回失敗 / 3回でロック）")
-
-    # 発行済みライセンスがある場合の表示
-    stg_key = st.session_state.get("staging_license_key")
-    if stg_key:
-        login_tab_container.success(f"✅ テストライセンス発行済み")
-        login_tab_container.code(stg_key)
-        login_tab_container.markdown(f"**プラン:** {st.session_state.get('staging_license_plan', '')}")
-
-        os_choice = col2.selectbox("OS", ["windows", "mac"], key="stg_os")
-        if login_tab_container.button("📥 ダウンロードURLを取得", key="stg_dl_btn"):
-            with st.spinner("確認中..."):
-                dl = staging_get_download_url(stg_key, os_choice)
-            if dl.get("status") == "ok":
-                login_tab_container.markdown(f"[⬇️ ダウンロード]({dl['download_url']})  (v{dl.get('version','')} / {dl.get('release_date','')})")
-            else:
-                login_tab_container.warning(f"ダウンロード: {dl.get('message')} （downloadsシートにexeが未登録の場合は正常）")
+                container.error(f"❌ パスワードが違います（{n}回失敗 / 3回でロック）")
 
 
 # ==========================================
