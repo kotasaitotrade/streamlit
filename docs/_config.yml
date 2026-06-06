@@ -1,0 +1,45 @@
+title: "せどりツール マニュアル"
+description: "メルカリ・ヤフフリの新着監視・自動値下げを完全自動化"
+lang: ja
+
+# GitHub Pages 設定
+theme: jekyll-theme-slate
+plugins:
+  - jekyll-paginate
+  - jekyll-sitemap
+  - jekyll-feed
+
+# サイト設定
+baseurl: ""
+url: "https://kotasaitotrade.github.io/sedori-tool-package"
+
+# Markdown 設定
+markdown: kramdown
+
+# ナビゲーション
+nav_links:
+  - title: "Home"
+    url: "/"
+  - title: "Windows セットアップ"
+    url: "/setup/windows-setup.html"
+  - title: "Mac セットアップ"
+    url: "/setup/mac-setup.html"
+
+# ページネーション
+paginate: 10
+paginate_path: "/page:num/"
+
+# Markdown 設定
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
+
+# exclude
+exclude:
+  - README.md
+  - CHANGELOG.md
+  - vendor/
+  - .git/
+  - .gitignore
+  - node_modules/
