@@ -138,6 +138,8 @@ def get_users_df(_client):
         df = pd.DataFrame(data[1:], columns=data[0]).astype(str)
         for c in USER_COLS:
             if c not in df.columns: df[c] = ""
+        if 'role' in df.columns:
+            df['role'] = df['role'].str.strip().str.lower()
         return df
     except: return pd.DataFrame(columns=USER_COLS)
 
@@ -210,8 +212,9 @@ def login_admin(client, login_input, password):
             return False, "IDまたはパスワードが違います", "", "", "", ""
         headers = ws.row_values(1)
         role_idx = headers.index('role') if 'role' in headers else 14
-        role = (row_values[role_idx] if role_idx < len(row_values) else "") or \
-               (row_values[14] if 14 < len(row_values) else "") or "user"
+        role_raw = (row_values[role_idx] if role_idx < len(row_values) else "") or \
+                   (row_values[14] if 14 < len(row_values) else "")
+        role = role_raw.strip().lower() or "user"
         if role not in ['admin', 'sales']:
             return False, "このアカウントには管理者パネルへのアクセス権がありません", "", "", "", ""
         force_pw_idx = headers.index('force_pw_change') if 'force_pw_change' in headers else 17
