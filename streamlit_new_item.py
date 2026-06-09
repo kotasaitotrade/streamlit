@@ -24,6 +24,8 @@ st.set_page_config(page_title="ツウチマネージャー", layout="wide", page
 from theme import apply_theme
 apply_theme()
 
+import announcements as anns_mod
+
 # ==========================================
 #   設定・定数
 # ==========================================
@@ -109,7 +111,7 @@ USER_COLS = [
     'ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'stripe_customer_id', 'subscription_id',
     'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine', 'secret_key',
     'failed_count', 'locked_until', 'temp_plan_settings', 'role', 'joined_at',
-    'assigned_sales', 'force_pw_change'
+    'assigned_sales', 'force_pw_change', 'paid_months', 'read_announcements'
 ]
 
 # ==========================================
@@ -820,9 +822,16 @@ def main():
     is_access_allowed = has_active_sub or is_period_active
     has_option = current_plan_id in ["plan_12000", "plan_11000", "plan_7000"]
 
+    # お知らせの未読チェック (通知設定編集ロック判定用)
+    user_read_str = str(user_row.get('read_announcements', ''))
+    anns_df = anns_mod.load_announcements(client, SPREADSHEET_ID)
+    unread_anns_df = anns_mod.get_unread_announcements(anns_df, user_read_str)
+    has_unread = (unread_anns_df is not None and not unread_anns_df.empty)
+
     with st.sidebar:
         st.write(f"User: **{st.session_state.get('logged_in_user_name','')}**")
-        menu = st.radio("メニュー", ["通知設定", "プラン契約・解約", "アカウント設定"])
+        unread_badge = f" 🔴 {len(unread_anns_df)}" if has_unread else ""
+        menu = st.radio("メニュー", ["通知設定", "プラン契約・解約", f"お知らせ{unread_badge}", "アカウント設定"])
         if st.button("ログアウト"):
             session_delete(st.session_state.get('_session_token'))
             st.session_state['logged_in_user_id'] = None
@@ -835,6 +844,9 @@ def main():
     if menu == "通知設定":
         st.subheader("📢 通知条件の設定")
         if not is_access_allowed: st.error("プラン契約が必要です"); st.stop()
+        if has_unread:
+            st.warning(f"📌 未読のお知らせが **{len(unread_anns_df)}件** あります。先にサイドバーの「お知らせ」をご確認ください。確認後、このページで設定を編集できるようになります。")
+            st.stop()
 
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
         allowed_opts = get_allowed_options(client, restriction_type)

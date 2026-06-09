@@ -22,6 +22,8 @@ st.set_page_config(page_title="ツウチマネージャー / 管理者パネル"
 from theme import apply_theme
 apply_theme()
 
+import announcements as anns_mod
+
 # ==========================================
 #   設定・定数（streamlit_new_item.py と共通）
 # ==========================================
@@ -80,7 +82,8 @@ USER_COLS = [
     'ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'stripe_customer_id', 'subscription_id',
     'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine', 'secret_key',
     'failed_count', 'locked_until', 'temp_plan_settings', 'role', 'joined_at',
-    'assigned_sales', 'force_pw_change', 'paid_months'
+    'assigned_sales', 'force_pw_change', 'paid_months', 'read_announcements',
+    'nojima_enabled',
 ]
 
 # ==========================================
@@ -472,6 +475,24 @@ def show_user_management(client, users_df):
                         ok, msg = update_user_field(client, uid, 'assigned_sales', new_sid)
                         if ok: st.success("担当営業者を割り当てました"); st.rerun()
                         else: st.error(msg)
+
+                st.divider()
+                st.write("**🔑 サイト別通知権限**")
+                nojima_val = str(user.get('nojima_enabled', '')).strip().lower()
+                nojima_enabled = nojima_val in ('1', 'true', 'yes')
+                new_nojima = st.checkbox(
+                    "ノジマオンライン 新着通知",
+                    value=nojima_enabled,
+                    key=f"nojima_{uid}",
+                    help="管理者が許可したユーザーのみノジマオンラインの新着通知を受け取れます",
+                )
+                if new_nojima != nojima_enabled:
+                    ok, msg = update_user_field(client, uid, 'nojima_enabled', "1" if new_nojima else "")
+                    st.session_state['_last_op_result'] = (
+                        ok,
+                        f"ノジマオンライン通知を{'有効' if new_nojima else '無効'}にしました" if ok else msg
+                    )
+                    st.rerun()
 
     with tab_sales:
         now = datetime.now()
@@ -891,6 +912,53 @@ def show_password_management(client, users_df):
                     st.error(msg)
 
 # ==========================================
+#   ページ: お知らせ管理
+# ==========================================
+def show_announcement_management(client, users_df, admin_uid):
+    st.subheader("📢 お知らせ管理")
+    st.caption("お知らせを投稿すると、登録済みの全ユーザー(チャンネルURLあり)のDiscordへ通知が送信されます。")
+
+    with st.form("ann_form", clear_on_submit=True):
+        title = st.text_input("タイトル", max_chars=100, placeholder="例: メンテナンスのお知らせ")
+        body = st.text_area("本文", height=180, max_chars=3500,
+                            placeholder="お知らせ本文を入力してください。Markdownの太字 **強調** や改行は反映されます。")
+        notify_discord = st.checkbox("投稿と同時にDiscordへ全ユーザー通知する", value=True)
+        if st.form_submit_button("投稿する", type="primary"):
+            if not title or not body:
+                st.error("タイトルと本文を入力してください")
+            else:
+                ok, ann_id_or_err = anns_mod.add_announcement(client, SPREADSHEET_ID, title, body, created_by=str(admin_uid))
+                if not ok:
+                    st.error(f"投稿失敗: {ann_id_or_err}")
+                else:
+                    st.success(f"投稿しました (ID: {ann_id_or_err})")
+                    if notify_discord:
+                        with st.spinner("Discord通知を送信中..."):
+                            # 配信対象: チャンネルURLが http で始まる全ユーザー (admin/disabled は除外しない: 案内も届ける)
+                            tgt = users_df[users_df['チャンネルURL'].astype(str).str.startswith('http')] if users_df is not None else pd.DataFrame()
+                            sent, failed = anns_mod.send_discord_to_all_users(tgt, title, body)
+                        anns_mod.mark_notified(client, SPREADSHEET_ID, ann_id_or_err)
+                        st.success(f"Discord通知: 成功 {sent}件 / 失敗 {failed}件")
+                    st.rerun()
+
+    st.divider()
+    st.markdown("### 過去のお知らせ")
+    anns_df = anns_mod.load_announcements(client, SPREADSHEET_ID)
+    if anns_df is None or anns_df.empty:
+        st.info("まだお知らせはありません")
+        return
+    disp = anns_df[['date', 'title', 'body', 'notified', 'id']].copy()
+    disp['notified'] = disp['notified'].apply(lambda x: '✅ 通知済' if str(x).strip() == '1' else '⏳ 未通知')
+    st.dataframe(disp, use_container_width=True, hide_index=True,
+                 column_config={
+                     'date': 'date',
+                     'title': 'title',
+                     'body': st.column_config.TextColumn('body', width='large'),
+                     'notified': 'Discord通知',
+                     'id': st.column_config.TextColumn('id', width='small'),
+                 })
+
+# ==========================================
 #   ページ: 強制パスワード変更
 # ==========================================
 def show_sedori_dashboard(client, users_df):
@@ -1034,7 +1102,7 @@ def main():
 
         menu_options = ["担当ユーザー", "月額料金参照"]
         if role == 'admin':
-            menu_options = ["ユーザー管理", "月額料金参照", "パスワード管理"]
+            menu_options = ["ユーザー管理", "月額料金参照", "パスワード管理", "お知らせ管理"]
         if ENABLE_SEDORI:
             menu_options.append("せどりツール利用状況")
 
@@ -1054,6 +1122,8 @@ def main():
         show_monthly_fee(client, users_df, uid, role)
     elif menu == "パスワード管理" and role == 'admin':
         show_password_management(client, users_df)
+    elif menu == "お知らせ管理" and role == 'admin':
+        show_announcement_management(client, users_df, uid)
     elif menu == "せどりツール利用状況" and ENABLE_SEDORI:
         show_sedori_dashboard(client, users_df)
 
