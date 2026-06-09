@@ -926,6 +926,45 @@ def show_password_management(client, users_df):
                     st.error(msg)
 
 # ==========================================
+#   ページ: サイト権限管理
+# ==========================================
+def show_site_permissions(client, users_df):
+    st.subheader("🔑 サイト権限管理")
+    st.caption("各ユーザーへのサイト別通知権限を設定します。")
+
+    if users_df is None or users_df.empty:
+        st.info("ユーザーが見つかりません。")
+        return
+
+    st.write("### ノジマオンライン通知権限")
+
+    for _, user in users_df.iterrows():
+        uid = str(user.get('ユーザーID', '')).strip()
+        if not uid:
+            continue
+        name = str(user.get('氏名', uid)).strip()
+        nojima_raw = str(user.get('nojima_enabled', '')).strip().lower()
+        nojima_on = nojima_raw in ('1', 'true', 'yes')
+
+        col_a, col_b = st.columns([3, 1])
+        with col_a:
+            st.write(f"**{name}** ({uid})")
+        with col_b:
+            new_val = st.checkbox(
+                "ノジマON",
+                value=nojima_on,
+                key=f"site_perm_nojima_{uid}",
+            )
+            if new_val != nojima_on:
+                ok, msg = update_user_field(client, uid, 'nojima_enabled', "1" if new_val else "")
+                if ok:
+                    st.success(f"{name}: ノジマ通知を{'有効' if new_val else '無効'}にしました")
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+
+# ==========================================
 #   ページ: お知らせ管理
 # ==========================================
 def show_announcement_management(client, users_df, admin_uid):
@@ -1116,7 +1155,7 @@ def main():
 
         menu_options = ["担当ユーザー", "月額料金参照"]
         if role == 'admin':
-            menu_options = ["ユーザー管理", "月額料金参照", "パスワード管理", "お知らせ管理"]
+            menu_options = ["ユーザー管理", "月額料金参照", "パスワード管理", "お知らせ管理", "サイト権限"]
         if ENABLE_SEDORI:
             menu_options.append("せどりツール利用状況")
 
@@ -1138,6 +1177,8 @@ def main():
         show_password_management(client, users_df)
     elif menu == "お知らせ管理" and role == 'admin':
         show_announcement_management(client, users_df, uid)
+    elif menu == "サイト権限" and role == 'admin':
+        show_site_permissions(client, users_df)
     elif menu == "せどりツール利用状況" and ENABLE_SEDORI:
         show_sedori_dashboard(client, users_df)
 
