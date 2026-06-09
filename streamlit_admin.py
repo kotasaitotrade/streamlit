@@ -140,6 +140,13 @@ def get_users_df(_client):
             if c not in df.columns: df[c] = ""
         if 'role' in df.columns:
             df['role'] = df['role'].str.strip().str.lower()
+        # 'rorle' はタイポ列。privileged ロールが入っていれば role に優先マージ
+        if 'rorle' in df.columns:
+            privileged = {'admin', 'sales'}
+            rorle_vals = df['rorle'].str.strip().str.lower()
+            role_vals = df['role'].str.strip().str.lower()
+            mask = rorle_vals.isin(privileged) & ~role_vals.isin(privileged)
+            df.loc[mask, 'role'] = rorle_vals[mask]
         return df
     except: return pd.DataFrame(columns=USER_COLS)
 
@@ -215,6 +222,12 @@ def login_admin(client, login_input, password):
         role_raw = (row_values[role_idx] if role_idx < len(row_values) else "") or \
                    (row_values[14] if 14 < len(row_values) else "")
         role = role_raw.strip().lower() or "user"
+        # 'rorle' タイポ列の救済: role が privileged でなければ rorle も確認
+        if role not in ('admin', 'sales') and 'rorle' in headers:
+            rorle_idx = headers.index('rorle')
+            rorle_val = (row_values[rorle_idx] if rorle_idx < len(row_values) else "").strip().lower()
+            if rorle_val in ('admin', 'sales'):
+                role = rorle_val
         if role not in ['admin', 'sales']:
             return False, "このアカウントには管理者パネルへのアクセス権がありません", "", "", "", ""
         force_pw_idx = headers.index('force_pw_change') if 'force_pw_change' in headers else 17
