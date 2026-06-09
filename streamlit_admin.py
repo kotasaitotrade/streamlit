@@ -491,24 +491,22 @@ def show_user_management(client, users_df):
                         ok, msg = update_user_field(client, uid, 'assigned_sales', new_sid)
                         if ok: st.success("担当営業者を割り当てました"); st.rerun()
                         else: st.error(msg)
-
-                st.divider()
-                st.write("**🔑 サイト別通知権限**")
-                nojima_val = str(user.get('nojima_enabled', '')).strip().lower()
-                nojima_enabled = nojima_val in ('1', 'true', 'yes')
-                new_nojima = st.checkbox(
-                    "ノジマオンライン 新着通知",
-                    value=nojima_enabled,
-                    key=f"nojima_{uid}",
-                    help="管理者が許可したユーザーのみノジマオンラインの新着通知を受け取れます",
-                )
-                if new_nojima != nojima_enabled:
-                    ok, msg = update_user_field(client, uid, 'nojima_enabled', "1" if new_nojima else "")
-                    st.session_state['_last_op_result'] = (
-                        ok,
-                        f"ノジマオンライン通知を{'有効' if new_nojima else '無効'}にしました" if ok else msg
+                    st.write("---")
+                    st.write("**🔑 サイト権限**")
+                    _nojima_val = str(user.get('nojima_enabled', '')).strip().lower()
+                    _nojima_on = _nojima_val in ('1', 'true', 'yes')
+                    _new_nojima = st.checkbox(
+                        "ノジマオンライン",
+                        value=_nojima_on,
+                        key=f"nojima_{uid}",
                     )
-                    st.rerun()
+                    if _new_nojima != _nojima_on:
+                        _ok, _msg = update_user_field(client, uid, 'nojima_enabled', "1" if _new_nojima else "")
+                        st.session_state['_last_op_result'] = (
+                            _ok,
+                            f"ノジマオンライン通知を{'有効' if _new_nojima else '無効'}にしました" if _ok else _msg
+                        )
+                        st.rerun()
 
     with tab_sales:
         now = datetime.now()
