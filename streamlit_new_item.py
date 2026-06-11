@@ -774,6 +774,7 @@ def main():
             ri, rn, rp = st.text_input("Discord ID", key="ri"), st.text_input("表示名", key="rn"), st.text_input("パスワード", type="password", key="rp")
             if st.button("登録"):
                 if not ri or not rn or not rp: st.error("入力不足")
+                elif not ri.isdigit(): st.error("Discord ID は数字のみで入力してください（例：123456789012345678）")
                 else:
                     suc, msg = register_user(client, ri, rn, rp)
                     if suc: st.success(msg); st.balloons()
