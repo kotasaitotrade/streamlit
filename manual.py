@@ -13,6 +13,9 @@ st.markdown("""
     .main { padding: 2rem; }
     h1 { color: #1f77e5; margin-top: 2rem; }
     h2 { color: #0d47a1; margin-top: 1.5rem; border-bottom: 2px solid #e0e0e0; padding-bottom: 0.5rem; }
+    [data-testid='stAppDeployButton']{display:none}
+    [data-testid='stMainMenu']{display:none}
+    [data-testid='stToolbar']{display:none}
     </style>
     """, unsafe_allow_html=True)
 
@@ -81,7 +84,7 @@ if page == "🏠 ホーム":
     ### ✨ このマニュアルの特徴
 
     ✅ **詳細な手順** - 迷わない、失敗しない
-    ✅ **スクリーンショット付き** - 画面を見ながら進められる
+    ✅ **スクリーンショット付き（Mac）/ テキストガイド（Windows）** - 画面を見ながら進められる
     ✅ **初心者向け** - パソコンに詳しくなくても OK
     ✅ **トラブル対応** - エラーが出ても自力で解決できる
 
@@ -492,10 +495,20 @@ elif page == "🟡 ヤフフリ監視":
     st.markdown("⏱️ **所要時間: 約 10 分**")
 
     st.markdown("""
+    ## 📋 このページで行うこと
+
+    1. ✅ 監視対象リスト（ヤフフリ用）に商品 URL を登録
+    2. ✅ 「ヤフフリ用監視リストを保存」ボタンで保存
+
     ヤフオクフリマ（ヤフフリ）の新着監視設定です。
+    設定方法は **🔍 メルカリ監視とほぼ同じ** です。
+    """)
 
-    設定方法は **メルカリ監視とほぼ同じ** です。
+    st.divider()
 
+    st.header("ステップ 1: 監視対象リスト（ヤフフリ用）を登録")
+
+    st.markdown("""
     ## 監視対象リスト（ヤフフリ用）
 
     設定画面の **⑤ 監視対象リスト** タブを開き、**「ヤフフリ用」** タブを選択します。
@@ -578,7 +591,7 @@ elif page == "📉 値下げ自動化":
 # 自動実行設定（起動・動作確認）
 # ─────────────────────────────────────────────
 elif page == "⚙️ 自動実行設定":
-    st.title("ツールの起動・動作確認")
+    st.title("自動実行設定（起動・動作確認）")
     st.markdown("⏱️ **所要時間: 約 5 分**")
 
     st.markdown("""
