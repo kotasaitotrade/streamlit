@@ -509,11 +509,11 @@ def show_user_management(client, users_df):
                         st.rerun()
                     st.write("---")
                     st.write("**📋 リスト通知**")
-                    _lt_raw = str(user.get('list_threshold', '0')).strip()
+                    _lt_raw = str(user.get('list_threshold', '')).strip()
                     try:
-                        _lt_cur = int(float(_lt_raw)) if _lt_raw not in ('', 'nan', 'None') else 0
+                        _lt_cur = int(float(_lt_raw)) if _lt_raw not in ('', 'nan', 'None') else 15
                     except (ValueError, TypeError):
-                        _lt_cur = 0
+                        _lt_cur = 15
                     _lt_new = st.number_input(
                         "リスト化する件数（0=個別通知）",
                         min_value=0,
@@ -986,11 +986,11 @@ def show_site_permissions(client, users_df):
                 else:
                     st.error(msg)
         with col_c:
-            _lt_raw2 = str(user.get('list_threshold', '0')).strip()
+            _lt_raw2 = str(user.get('list_threshold', '')).strip()
             try:
-                _lt_cur2 = int(float(_lt_raw2)) if _lt_raw2 not in ('', 'nan', 'None') else 0
+                _lt_cur2 = int(float(_lt_raw2)) if _lt_raw2 not in ('', 'nan', 'None') else 15
             except (ValueError, TypeError):
-                _lt_cur2 = 0
+                _lt_cur2 = 15
             _lt_new2 = st.number_input(
                 "リスト通知（件数）",
                 min_value=0,
