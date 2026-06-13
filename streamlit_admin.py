@@ -83,7 +83,7 @@ USER_COLS = [
     'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine', 'secret_key',
     'failed_count', 'locked_until', 'temp_plan_settings', 'role', 'joined_at',
     'assigned_sales', 'force_pw_change', 'paid_months', 'read_announcements',
-    'nojima_enabled',
+    'nojima_enabled', 'list_threshold',
 ]
 
 # ==========================================
@@ -505,6 +505,29 @@ def show_user_management(client, users_df):
                         st.session_state['_last_op_result'] = (
                             _ok,
                             f"ノジマオンライン通知を{'有効' if _new_nojima else '無効'}にしました" if _ok else _msg
+                        )
+                        st.rerun()
+                    st.write("---")
+                    st.write("**📋 リスト通知**")
+                    _lt_raw = str(user.get('list_threshold', '0')).strip()
+                    try:
+                        _lt_cur = int(float(_lt_raw)) if _lt_raw not in ('', 'nan', 'None') else 0
+                    except (ValueError, TypeError):
+                        _lt_cur = 0
+                    _lt_new = st.number_input(
+                        "リスト化する件数（0=個別通知）",
+                        min_value=0,
+                        max_value=50,
+                        value=_lt_cur,
+                        step=1,
+                        key=f"list_threshold_{uid}",
+                        help="N件以上の新着があったとき、個別embed の代わりにリスト1通にまとめて送信します。0は従来の個別通知。",
+                    )
+                    if _lt_new != _lt_cur:
+                        _ok, _msg = update_user_field(client, uid, 'list_threshold', str(_lt_new))
+                        st.session_state['_last_op_result'] = (
+                            _ok,
+                            f"リスト通知件数を {_lt_new} に変更しました" if _ok else _msg
                         )
                         st.rerun()
 
@@ -946,7 +969,7 @@ def show_site_permissions(client, users_df):
         nojima_raw = str(user.get('nojima_enabled', '')).strip().lower()
         nojima_on = nojima_raw in ('1', 'true', 'yes')
 
-        col_a, col_b = st.columns([3, 1])
+        col_a, col_b, col_c = st.columns([3, 1, 2])
         with col_a:
             st.write(f"**{name}** ({uid})")
         with col_b:
@@ -959,6 +982,28 @@ def show_site_permissions(client, users_df):
                 ok, msg = update_user_field(client, uid, 'nojima_enabled', "1" if new_val else "")
                 if ok:
                     st.success(f"{name}: ノジマ通知を{'有効' if new_val else '無効'}にしました")
+                    st.rerun()
+                else:
+                    st.error(msg)
+        with col_c:
+            _lt_raw2 = str(user.get('list_threshold', '0')).strip()
+            try:
+                _lt_cur2 = int(float(_lt_raw2)) if _lt_raw2 not in ('', 'nan', 'None') else 0
+            except (ValueError, TypeError):
+                _lt_cur2 = 0
+            _lt_new2 = st.number_input(
+                "リスト通知（件数）",
+                min_value=0,
+                max_value=50,
+                value=_lt_cur2,
+                step=1,
+                key=f"site_perm_lt_{uid}",
+                help="N件以上の新着をリスト1通にまとめる。0=個別通知。",
+            )
+            if _lt_new2 != _lt_cur2:
+                ok, msg = update_user_field(client, uid, 'list_threshold', str(_lt_new2))
+                if ok:
+                    st.success(f"{name}: リスト通知を {_lt_new2} 件に設定しました")
                     st.rerun()
                 else:
                     st.error(msg)
