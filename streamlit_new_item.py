@@ -851,6 +851,9 @@ def main():
 
         user_df = full_df[full_df['ユーザーID'] == str(uid)].copy() if full_df is not None else pd.DataFrame()
         allowed_opts = get_allowed_options(client, restriction_type)
+        nojima_ok = str(user_row.get('nojima_enabled', '')).strip().lower() in ('1', 'true', 'yes')
+        if not nojima_ok:
+            allowed_opts = [o for o in allowed_opts if not o.startswith('ノジマ')]
 
         settings_key = f'settings_{uid}'
         if settings_key not in st.session_state:
