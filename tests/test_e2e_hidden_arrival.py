@@ -37,12 +37,27 @@ def check(cond, msg):
         _fail += 1
 
 
-def body_text(page) -> str:
-    page.wait_for_timeout(9000)  # Streamlit 描画待ち
-    try:
-        return page.inner_text("body")
-    except Exception:
-        return ""
+def _all_frames_text(page) -> str:
+    """Streamlit本体はiframe内に描画されるため、全フレームのHTMLを連結して返す。"""
+    parts = []
+    for fr in page.frames:
+        try:
+            parts.append(fr.content())
+        except Exception:
+            pass
+    return "\n".join(parts)
+
+
+def wait_text(page, needle: str, timeout_s: int = 25) -> bool:
+    """描画完了まで全フレームを横断ポーリングして needle の有無を返す。"""
+    end = time.time() + timeout_s
+    last = ""
+    while time.time() < end:
+        last = _all_frames_text(page)
+        if needle in last:
+            return True
+        page.wait_for_timeout(1500)
+    return needle in last
 
 
 def run():
@@ -52,8 +67,8 @@ def run():
 
         # 1) 誤った合言葉 → 通常ログイン（隠しページ要素なし）
         page.goto(f"{APP}?buy=arrival&k=wrong-key", wait_until="domcontentloaded", timeout=60000)
-        t = body_text(page)
-        check("新着通知ライセンス" not in t, "誤った合言葉では購入ページが出ない")
+        wait_text(page, "ログイン", 25)  # アプリ描画待ち
+        check(not wait_text(page, "ログインが必要", 6), "誤った合言葉では購入案内が出ない")
 
         if not KEY:
             print("⚠ HIDDEN_KEY 未指定のため、正しい合言葉の検証はスキップ")
@@ -62,23 +77,19 @@ def run():
 
         # 2) 正しい合言葉 + 未ログイン → 案内表示
         page.goto(f"{APP}?buy=arrival&k={KEY}", wait_until="domcontentloaded", timeout=60000)
-        t = body_text(page)
-        check("ログインが必要" in t, "正しい合言葉＋未ログインで案内が出る")
+        check(wait_text(page, "ログインが必要", 25), "正しい合言葉＋未ログインで案内が出る")
 
         # 3) ログインして購入ページ
         if LOGIN_ID and LOGIN_PW:
-            # ID / パスワードを入力してログイン
             inputs = page.get_by_role("textbox")
             inputs.nth(0).fill(LOGIN_ID)
-            # パスワードは type=password。2番目のtextboxを使う
             try:
                 inputs.nth(1).fill(LOGIN_PW)
             except Exception:
                 pass
             page.get_by_role("button", name="ログイン").first.click()
-            t = body_text(page)
-            check("新着通知ライセンス" in t, "ログイン後に新着通知ライセンス購入ページが表示")
-            check("購入手続きへ進む" in t, "「購入手続きへ進む」ボタンが表示")
+            check(wait_text(page, "新着通知ライセンス", 25), "ログイン後に新着通知ライセンス購入ページが表示")
+            check(wait_text(page, "購入手続きへ進む", 10), "「購入手続きへ進む」ボタンが表示")
         else:
             print("⚠ TEST_LOGIN_ID/PW 未指定のため、ログイン後の検証はスキップ")
 
