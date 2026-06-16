@@ -701,6 +701,58 @@ def save_merged_data(client, full_df, edited_df, user_id, restriction_type):
     except Exception as e: st.error(f"保存エラー: {e}"); return None
 
 # ==========================================
+#   隠しページ: メルカリ/ヤフフリ 新着通知ライセンス購入
+#   アクセス: ?buy=arrival&k=<合言葉>  （合言葉は st.secrets.sedori.hidden_arrival_key）
+#   既存 arrival プラン(¥5,000/月サブスク・新着[1,2]) をログイン済みユーザーに販売する。
+# ==========================================
+def _hidden_arrival_key() -> str:
+    return _sec_price("hidden_arrival_key", "")
+
+
+def is_hidden_arrival_request() -> bool:
+    key = _hidden_arrival_key()
+    return bool(key) and st.query_params.get("buy") == "arrival" and st.query_params.get("k") == key
+
+
+def render_hidden_arrival_page(client, uid, user_row):
+    plan = SEDORI_PLANS["arrival"]
+    st.markdown("## 🔍 メルカリ / ヤフフリ 新着通知ライセンス")
+    st.caption("メルカリ・ヤフフリの新着出品を Discord へ即通知するツールのライセンスです。")
+    st.metric("月額", f"¥{plan['price']:,} / 月")
+    st.markdown(
+        "- 指定の型番・キーワードで新着商品をリアルタイム通知\n"
+        "- メルカリ / ヤフフリ 両対応\n"
+        "- いつでも解約可能（契約期間終了日まで利用できます）"
+    )
+
+    cur_plan = str(user_row.get("plan_id", ""))
+    sub_id = str(user_row.get("subscription_id", ""))
+    has_sub = sub_id.strip().lower() not in ("", "nan", "none")
+    if cur_plan == plan["plan_id"] and has_sub:
+        st.success("✅ 既にこのライセンスをご利用中です。デスクトップツールからご利用いただけます。")
+        show_tokushoho()
+        return
+
+    st.divider()
+    st.markdown("#### 📋 利用規約（抜粋）")
+    st.caption(
+        "本サービスはフリマサイトの新着商品情報を Discord へ通知するツールです。"
+        "通知の確実な配信は保証しません。月額サブスクリプションで、解約するまで毎月課金されます。"
+        "解約後も契約期間終了日までご利用いただけます。"
+    )
+    agree = st.checkbox("利用規約に同意します", key="hidden_arrival_agree")
+    if st.button("💳 購入手続きへ進む（¥5,000/月）", type="primary", disabled=not agree, key="hidden_arrival_buy"):
+        # 決済成功ハンドラ(session_id)が読む temp settings に arrival プランを保存してから checkout
+        update_user_temp_settings(client, uid, "all", plan["plan_id"])
+        suc, url = create_stripe_checkout_session(uid, plan["stripe_price_id"])
+        if suc:
+            st.link_button("お支払い画面へ進む", url, type="primary")
+        else:
+            st.error(f"決済の初期化に失敗しました: {url}")
+    show_tokushoho()
+
+
+# ==========================================
 #   メイン
 # ==========================================
 def main():
@@ -740,7 +792,12 @@ def main():
                 st.session_state['logged_in_user_name'] = uname_c
                 st.session_state['_session_token'] = url_token
 
+    # 隠しページ（新着ライセンス購入）リクエスト判定
+    hidden_arrival = is_hidden_arrival_request()
+
     if st.session_state['logged_in_user_id'] is None:
+        if hidden_arrival:
+            st.info("🔒 新着通知ライセンスの購入にはログインが必要です。ログイン後、購入ページが表示されます。")
         st.markdown("## 📊 ツウチマネージャー (市場リサーチツール)")
         tab1, tab2 = st.tabs(["🔑 ログイン", "✨ 新規登録"])
         with tab1:
@@ -807,7 +864,12 @@ def main():
     uid = st.session_state['logged_in_user_id']
     users_df = get_users_df(client)
     user_row = users_df[users_df['ユーザーID'] == str(uid)].iloc[0]
-    
+
+    # 隠しページ（新着ライセンス購入）: ログイン済みならここで描画して通常UIを出さない
+    if hidden_arrival:
+        render_hidden_arrival_page(client, uid, user_row)
+        st.stop()
+
     sub_id = str(user_row.get('subscription_id', ''))
     current_plan_id = str(user_row.get('plan_id', ''))
     restriction_type = str(user_row.get('plan', 'all'))
