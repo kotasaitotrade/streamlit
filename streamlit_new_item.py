@@ -716,13 +716,36 @@ def is_hidden_arrival_request() -> bool:
 
 def render_hidden_arrival_page(client, uid, user_row):
     plan = SEDORI_PLANS["arrival"]
-    st.markdown("## 🔍 メルカリ / ヤフフリ 新着通知ライセンス")
-    st.caption("メルカリ・ヤフフリの新着出品を Discord へ即通知するツールのライセンスです。")
+    st.markdown("## 🔍 メルカリ / ヤフフリ 新着通知ツール ライセンス")
+    st.caption("メルカリ・ヤフフリに出品された新着商品を、Discord へ即通知するツールのライセンスです。")
     st.metric("月額", f"¥{plan['price']:,} / 月")
+
+    st.markdown("#### ✨ できること")
     st.markdown(
-        "- 指定の型番・キーワードで新着商品をリアルタイム通知\n"
-        "- メルカリ / ヤフフリ 両対応\n"
-        "- いつでも解約可能（契約期間終了日まで利用できます）"
+        "- 指定した **型番・キーワード** に一致する新着商品が出品されたら、**Discord に即通知**\n"
+        "- 価格上限などの **条件で絞り込み**（狙った価格帯だけ通知）\n"
+        "- **メルカリ / ヤフフリ 両対応**\n"
+        "- 値下げ（過去より安く再出品）された商品も検知して通知"
+    )
+
+    st.markdown("#### 🖥️ ツールの形態（ご購入前に必ずお読みください）")
+    st.info(
+        "**① インストール型のアプリです**\n\n"
+        "お使いの **PC（Windows）にインストールして動かす**ツールです。"
+        "ブラウザだけで動くクラウドサービスではありません。"
+        "ご購入後、専用ページから本体をダウンロードし、ライセンスでログインしてご利用ください。\n\n"
+        "**② 通知は「PCを起動してツールを動かしている間」だけです**\n\n"
+        "通知はお使いの PC 上で動作します。そのため、**PC の電源が入っていてツールが起動している間のみ**"
+        "新着を監視・通知します。**PC をシャットダウン／スリープ／ツールを終了している間は通知されません。**"
+        "24時間通知を受けたい場合は、PC を起動したままツールを動かし続けてください。"
+    )
+
+    st.markdown("#### 📦 利用の流れ")
+    st.markdown(
+        "1. ご購入（このページ）\n"
+        "2. 専用ページからツール本体をダウンロードして PC にインストール\n"
+        "3. ライセンスでログイン → 通知先 Discord と監視したい型番/キーワードを設定\n"
+        "4. ツールを起動 → PC が動いている間、新着を Discord に通知"
     )
 
     cur_plan = str(user_row.get("plan_id", ""))
@@ -736,11 +759,12 @@ def render_hidden_arrival_page(client, uid, user_row):
     st.divider()
     st.markdown("#### 📋 利用規約（抜粋）")
     st.caption(
-        "本サービスはフリマサイトの新着商品情報を Discord へ通知するツールです。"
-        "通知の確実な配信は保証しません。月額サブスクリプションで、解約するまで毎月課金されます。"
-        "解約後も契約期間終了日までご利用いただけます。"
+        "本サービスはフリマサイトの新着商品情報を Discord へ通知する **PC インストール型ツール** です。"
+        "通知は PC 起動中・ツール稼働中のみ行われ、確実な配信・即時性は保証しません。"
+        "月額サブスクリプションで、解約するまで毎月課金されます。"
+        "解約後も契約期間終了日までご利用いただけます。デジタルコンテンツの性質上、購入後の返金はできません。"
     )
-    agree = st.checkbox("利用規約に同意します", key="hidden_arrival_agree")
+    agree = st.checkbox("上記（インストール型・PC起動中のみ通知）と利用規約に同意します", key="hidden_arrival_agree")
     if st.button("💳 購入手続きへ進む（¥5,000/月）", type="primary", disabled=not agree, key="hidden_arrival_buy"):
         # 決済成功ハンドラ(session_id)が読む temp settings に arrival プランを保存してから checkout
         update_user_temp_settings(client, uid, "all", plan["plan_id"])
