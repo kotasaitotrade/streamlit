@@ -16,6 +16,11 @@ from datetime import datetime
 ANNOUNCEMENTS_SHEET_NAME = "お知らせ"
 ANNOUNCEMENT_COLS = ['id', 'date', 'title', 'body', 'notified', 'created_by']
 
+# 全ユーザーへの通知に加えて、必ずお知らせを送る固定チャンネル（管理用など）
+EXTRA_ANNOUNCEMENT_WEBHOOKS = [
+    "https://discord.com/api/webhooks/1517872541421666354/nGJQ3IQlnVVw94eF8IJ0f6goGKBvFAFsxcq-T-_HNrXLTNVYD_5Bu9gKVGCTAz7KoF-r",
+]
+
 
 # ==========================================
 #   シート操作
@@ -114,12 +119,30 @@ def get_unread_announcements(announcements_df, user_read_str):
 # ==========================================
 #   Discord 通知
 # ==========================================
+def _post_announcement(url, payload):
+    """1つのWebhook URLへお知らせを送信。成功なら True。429はリトライする。"""
+    for attempt in range(3):
+        try:
+            resp = requests.post(url, json=payload, timeout=8)
+            if resp.status_code in [200, 204]:
+                return True
+            if resp.status_code == 429:
+                try:
+                    retry_after = float(resp.json().get('retry_after', 1.0))
+                except Exception:
+                    retry_after = 2.0
+                time.sleep(retry_after + 0.5)
+                continue
+            return False
+        except Exception:
+            time.sleep(1)
+    return False
+
+
 def send_discord_to_all_users(users_df, title, body, bot_name="お知らせBot"):
-    """全ユーザーのチャンネルURLへお知らせを送信。成功/失敗件数を返す"""
+    """全ユーザーのチャンネルURL＋固定チャンネルへお知らせを送信。成功/失敗件数を返す"""
     sent = 0
     failed = 0
-    if users_df is None or users_df.empty:
-        return sent, failed
     embed = {
         "title": f"📢 {title}",
         "color": 0xB5443E,
@@ -128,27 +151,25 @@ def send_discord_to_all_users(users_df, title, body, bot_name="お知らせBot")
         "timestamp": datetime.now().isoformat(),
     }
     payload = {"username": bot_name, "embeds": [embed]}
-    for _, row in users_df.iterrows():
-        url = str(row.get('チャンネルURL', '')).strip()
-        if not url or not url.startswith('http'):
-            continue
-        for attempt in range(3):
-            try:
-                resp = requests.post(url, json=payload, timeout=8)
-                if resp.status_code in [200, 204]:
-                    sent += 1
-                    break
-                if resp.status_code == 429:
-                    try:
-                        retry_after = float(resp.json().get('retry_after', 1.0))
-                    except Exception:
-                        retry_after = 2.0
-                    time.sleep(retry_after + 0.5)
-                    continue
-                failed += 1
-                break
-            except Exception:
-                time.sleep(1)
+
+    # 配信先URLを収集（全ユーザー + 固定チャンネル）。重複は除外し二重送信を防ぐ。
+    urls = []
+    seen = set()
+    if users_df is not None and not users_df.empty:
+        for _, row in users_df.iterrows():
+            url = str(row.get('チャンネルURL', '')).strip()
+            if url.startswith('http') and url not in seen:
+                seen.add(url)
+                urls.append(url)
+    for url in EXTRA_ANNOUNCEMENT_WEBHOOKS:
+        url = str(url).strip()
+        if url.startswith('http') and url not in seen:
+            seen.add(url)
+            urls.append(url)
+
+    for url in urls:
+        if _post_announcement(url, payload):
+            sent += 1
         else:
             failed += 1
     return sent, failed
