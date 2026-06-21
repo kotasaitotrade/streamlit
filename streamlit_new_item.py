@@ -1109,6 +1109,33 @@ def main():
                 suc, url = create_stripe_checkout_session(uid, target_price_id)
                 if suc: st.link_button("支払いを完了させる", url, type="primary")
 
+    elif menu.startswith("お知らせ"):
+        st.subheader("📢 お知らせ")
+        if anns_df is None or anns_df.empty:
+            st.info("現在お知らせはありません。")
+        else:
+            read_ids = anns_mod.parse_read_ids(user_read_str)
+            for _, ann in anns_df.iterrows():
+                ann_id = str(ann.get('id', ''))
+                is_unread = ann_id not in read_ids
+                title = str(ann.get('title', ''))
+                date = str(ann.get('date', ''))
+                badge = "🔴 " if is_unread else ""
+                with st.expander(f"{badge}{date}　{title}", expanded=is_unread):
+                    st.markdown(str(ann.get('body', '')))
+            st.divider()
+            if has_unread:
+                if st.button("✅ すべて既読にする", type="primary"):
+                    all_ids = set(anns_df['id'].astype(str)) | read_ids
+                    new_read_str = anns_mod.serialize_read_ids(all_ids)
+                    if _update_user_field(client, uid, 'read_announcements', new_read_str):
+                        st.success("すべて既読にしました。通知設定を編集できます。")
+                        st.rerun()
+                    else:
+                        st.error("既読の保存に失敗しました。時間をおいて再度お試しください。")
+            else:
+                st.success("未読のお知らせはありません。")
+
     elif menu == "アカウント設定":
         st.subheader("⚙️ アカウント設定")
         st.write("#### パスワード変更")
