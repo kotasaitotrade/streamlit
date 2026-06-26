@@ -34,8 +34,17 @@ EC新着監視（既存サービス）の利用者に **メルカリ/ヤフフ�
 
 | ファイル | 追加した内容 |
 |---------|-------------|
-| `streamlit_new_item.py` | `ENABLE_SEDORI` フラグ + `SEDORI_PLANS` 定義 + 契約中ユーザー向けクロスセルバナー（3プランの Checkout ボタン） |
+| `streamlit_new_item.py` | `ENABLE_SEDORI` フラグ + `SEDORI_PLANS` 定義 + 契約中ユーザー向けクロスセルバナー（3プランの Checkout ボタン）+ 通知設定ページ下部の広告バナー（紫グラデーション） |
 | `streamlit_admin.py` | `ENABLE_SEDORI` フラグ + サイドバーメニュー「せどりツール利用状況」+ `show_sedori_dashboard()` 関数 |
+
+## 通知設定ページの広告バナー
+
+`通知設定` ページの保存ボタン下に **紫グラデーションの広告バナー** を常時表示する（ENABLE_SEDORI に依存しない）。
+
+- 表示内容：フルプラン 5機能一覧（メルカリ/ヤフフリ新着・自動値下げ・コピー出品）
+- 価格：通常 ¥20,000 → **今だけ ¥6,000/月**（モニター限定）
+- リンク：`https://discord-notify-tool.streamlit.app` へ遷移（別タブ）
+- 対象：ログイン済みユーザー全員（有料無料問わず）
 
 ## feature flag の挙動
 

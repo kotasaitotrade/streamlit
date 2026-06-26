@@ -973,9 +973,9 @@ def main():
             with st.container(border=True):
                 col1, col2 = st.columns([5, 1])
                 with col1:
-                    val = st.session_state.get(f'combo_{row_id}', '')
-                    idx = (allowed_opts.index(val) + 1) if val in allowed_opts else 0
-                    st.selectbox("検索条件", [''] + allowed_opts, index=idx, key=f'combo_{row_id}')
+                    # session_state にすでに値が設定されているため index= を省略する
+                    # （index= と session_state の二重設定による Streamlit 警告を防止）
+                    st.selectbox("検索条件", [''] + allowed_opts, key=f'combo_{row_id}')
                 with col2:
                     st.write("")
                     if st.button("🗑️", key=f'del_{row_id}'):
@@ -1029,6 +1029,49 @@ def main():
                         st.success("✅ 設定保存完了")
                     except Exception as e: st.error(f"保存エラー: {e}")
 
+        # ── せどりツールパッケージの広告 ──────────────────────────────
+        st.markdown("---")
+        st.markdown("""
+<div style="
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 12px;
+    padding: 22px 26px;
+    color: white;
+    margin-top: 8px;
+">
+    <div style="font-size: 1.25em; font-weight: bold; margin-bottom: 8px;">
+        🚀 せどりツールパッケージ（フルプラン）
+    </div>
+    <div style="font-size: 0.9em; opacity: 0.9; margin-bottom: 12px;">
+        新着通知 + 自動値下げ + <strong>メルカリ→ヤフフリ 自動コピー出品</strong> がひとつに。
+    </div>
+    <table style="color:white; font-size:0.85em; border-collapse:collapse; margin-bottom:12px;">
+        <tr>
+            <td style="padding:3px 10px 3px 0;">✅ メルカリ新着通知</td>
+            <td style="padding:3px 10px 3px 0;">✅ ヤフフリ新着通知</td>
+        </tr>
+        <tr>
+            <td style="padding:3px 10px 3px 0;">✅ メルカリ自動値下げ</td>
+            <td style="padding:3px 10px 3px 0;">✅ ヤフフリ自動値下げ</td>
+        </tr>
+        <tr>
+            <td style="padding:3px 10px 3px 0;" colspan="2">✅ <strong>メルカリ→ヤフフリ 自動コピー出品（フルプラン限定）</strong></td>
+        </tr>
+    </table>
+    <div style="font-size:1em; margin-bottom:6px;">
+        <span style="text-decoration:line-through; opacity:0.65;">通常 ¥20,000/月</span>
+        　→　<strong style="font-size:1.25em;">今だけ ¥6,000/月</strong>
+        　<span style="background:rgba(255,255,0,0.25); border-radius:4px; padding:2px 7px; font-size:0.75em;">モニター限定価格</span>
+    </div>
+    <div style="font-size:0.75em; opacity:0.7; margin-bottom:14px;">※ モニター価格は予告なく終了する場合があります。</div>
+    <a href="https://discord-notify-tool.streamlit.app" target="_blank" style="
+        background: white; color: #764ba2; font-weight: bold;
+        padding: 9px 22px; border-radius: 8px; text-decoration: none;
+        font-size: 0.95em; display: inline-block;
+    ">🛒 今すぐ申し込む</a>
+</div>
+""", unsafe_allow_html=True)
+
     elif menu == "プラン契約・解約":
         st.subheader("💳 サブスクリプション管理")
         if has_active_sub:
@@ -1036,9 +1079,7 @@ def main():
             plan_label, plan_price = PLAN_USER_LABEL.get(current_plan_id, ("プラン", 0))
             if plan_price > 0:
                 st.success(f"✅ **現在プラン契約中**")
-                pc1, pc2 = st.columns(2)
-                pc1.metric("ご契約プラン", plan_label)
-                pc2.metric("月額", f"¥{plan_price:,}")
+                st.markdown(f"**ご契約プラン：** {plan_label}　｜　**月額：** ¥{plan_price:,}")
             else:
                 st.success("✅ **現在プラン契約中です**")
             st.caption("💡 解約しても契約期間終了日までサービスは継続してご利用いただけます。")
