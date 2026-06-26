@@ -56,9 +56,9 @@ PLANS = {
 #   - true            → プラン契約UIに「せどりツール」セクションが追加表示
 # ==========================================
 try:
-    ENABLE_SEDORI = bool(st.secrets.get("sedori", {}).get("enabled", False))
+    ENABLE_SEDORI = bool(st.secrets.get("sedori", {}).get("enabled", True))
 except Exception:
-    ENABLE_SEDORI = os.environ.get("ENABLE_SEDORI", "false").lower() == "true"
+    ENABLE_SEDORI = os.environ.get("ENABLE_SEDORI", "true").lower() != "false"
 
 # Stripe price ID は本番作成後に Secrets で上書き可能
 # (st.secrets.sedori.price_id_pricedown 等を最優先で参照する)
@@ -86,12 +86,12 @@ SEDORI_PLANS = {
         "allowed_tools": [1, 2],
     },
     "all_full": {
-        "name": "せどりツールフルセット(値下げ+新着フリマ)",
-        "desc": "メルカリ・ヤフフリの自動値下げ＋新着通知がセットに。単品2つより2,000円お得。",
-        "price": 8000,
-        "stripe_price_id": _sec_price("price_id_all_full", "price_1TedD7Ruq87ZH1shpjAAfF3T"),
-        "plan_id": "plan_all_full_8000",
-        "allowed_tools": [1, 2, 3, 4],
+        "name": "せどりツール フルプラン（今だけモニター価格）",
+        "desc": "自動値下げ＋新着通知＋メルカリ→ヤフフリ自動コピー出品がフルセット。通常¥20,000が今だけ¥6,000。",
+        "price": 6000,
+        "stripe_price_id": _sec_price("price_id_all_full", "price_1TmaaYRuq87ZH1shDtnMmom4"),
+        "plan_id": "plan_all_full_6000",
+        "allowed_tools": [1, 2, 3, 4, 5],
     },
 }
 
@@ -1054,6 +1054,7 @@ def main():
                     "**メルカリ / ヤフフリ専用のせどり業務効率化ツール** を別途追加でご利用いただけます。\n\n"
                     "- 📉 **自動値下げ**：出品中の商品を3時間ごとに自動値下げ。希少品やいいね無反応特例も搭載\n"
                     "- 🔍 **新着通知**：指定の型番・キーワードでメルカリ/ヤフフリの新着商品をDiscord即通知\n"
+                    "- 📤 **コピー出品**：メルカリの商品をワンクリックでヤフフリへ自動コピー出品（フルプラン限定）\n"
                     "- 🤝 **連携活用**：EC新着で見つけた商品の市場価格をメルカリでチェック→自動値下げ出品まで一気通貫"
                 )
                 up_col1, up_col2, up_col3 = st.columns(3)
