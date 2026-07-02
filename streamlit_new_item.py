@@ -356,6 +356,10 @@ def get_sedori_download_url(license_key: str, os_type: str = "windows"):
 @st.cache_data(ttl=60)
 def lookup_sedori_license(_client, stripe_customer_id: str):
     """せどり専用スプシから該当ユーザーのライセンス情報を取得。
+    ライセンス更新(新規発行)にも自動追従する:
+      1. enabled=TRUE の行を優先
+      2. その中で issued_at が最も新しい行を選ぶ
+      3. 全部無効なら enabled=FALSE の中でも issued_at が最新のものを返す
     見つからなければ None を返す。
     戻り値: dict {license_key, plan, issued_at, expires_at, enabled} or None
     """
@@ -367,7 +371,6 @@ def lookup_sedori_license(_client, stripe_customer_id: str):
         if len(data) < 2:
             return None
         headers = data[0]
-        # 列インデックス取得（存在しない場合フォールバック）
         def _idx(name, default=-1):
             try: return headers.index(name)
             except ValueError: return default
@@ -379,17 +382,30 @@ def lookup_sedori_license(_client, stripe_customer_id: str):
         idx_cus = _idx('stripe_customer_id', 7)
         if idx_cus < 0:
             return None
-        # モック行をスキップして stripe_customer_id で検索。最新（後ろ）を優先
-        matched = None
+
+        target = str(stripe_customer_id).strip()
+        enabled_rows = []
+        disabled_rows = []
+        max_col = max(idx_key, idx_plan, idx_issued, idx_expires, idx_enabled, idx_cus)
         for row in data[1:]:
-            while len(row) <= max(idx_key, idx_plan, idx_issued, idx_expires, idx_enabled, idx_cus):
+            while len(row) <= max_col:
                 row = row + ['']
             if str(row[idx_key]).startswith('MOCK'):
                 continue
-            if str(row[idx_cus]).strip() == str(stripe_customer_id).strip():
-                matched = row
-        if not matched:
+            if str(row[idx_cus]).strip() != target:
+                continue
+            issued = str(row[idx_issued]).strip()
+            enabled = str(row[idx_enabled]).strip().upper() == 'TRUE'
+            (enabled_rows if enabled else disabled_rows).append((issued, row))
+
+        # enabled=TRUE を優先し、その中で issued_at 最大(=最新)を選ぶ
+        candidates = enabled_rows if enabled_rows else disabled_rows
+        if not candidates:
             return None
+        # issued_at は 'YYYY-MM-DD' 形式のため文字列比較で降順ソート可能
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        matched = candidates[0][1]
+
         return {
             'license_key': str(matched[idx_key]).strip(),
             'plan':        str(matched[idx_plan]).strip(),
