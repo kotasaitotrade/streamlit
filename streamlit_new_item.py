@@ -117,6 +117,15 @@ PLAN_USER_LABEL = {
     "plan_all_full_6000":         ("せどりツール フルプラン", 6000),
     "plan_all_full_20000":        ("せどりツール フルプラン", 20000),
 }
+# せどり系プランかどうか判定
+SEDORI_PLAN_IDS = {
+    "plan_sedori_pricedown_5000",
+    "plan_sedori_arrival_5000",
+    "plan_all_full_6000",
+    "plan_all_full_20000",
+}
+# せどりライセンス用スプシ (streamlit_admin.py と同一)
+SEDORI_SPREADSHEET_ID = "1QNDhwNAowAL73dadzXeKZQV1VHvpPbz5Q_gXTj39fto"
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 
 # 管理者アプリと共有する列定義（順番を変えないこと）
@@ -339,6 +348,57 @@ def staging_get_download_url(license_key: str, os_type: str = "windows"):
     url = f"{GAS}?action=download&key={_up.quote(license_key)}&os={os_type}"
     with _ur.urlopen(url, timeout=30) as r:
         return _json.loads(r.read())
+
+# 本番用エイリアス（stagingという名前が誤解を招くため）
+def get_sedori_download_url(license_key: str, os_type: str = "windows"):
+    return staging_get_download_url(license_key, os_type)
+
+@st.cache_data(ttl=60)
+def lookup_sedori_license(_client, stripe_customer_id: str):
+    """せどり専用スプシから該当ユーザーのライセンス情報を取得。
+    見つからなければ None を返す。
+    戻り値: dict {license_key, plan, issued_at, expires_at, enabled} or None
+    """
+    if not stripe_customer_id:
+        return None
+    try:
+        ws = _client.open_by_key(SEDORI_SPREADSHEET_ID).worksheet('licenses')
+        data = ws.get_all_values()
+        if len(data) < 2:
+            return None
+        headers = data[0]
+        # 列インデックス取得（存在しない場合フォールバック）
+        def _idx(name, default=-1):
+            try: return headers.index(name)
+            except ValueError: return default
+        idx_key = _idx('license_key', 0)
+        idx_plan = _idx('plan', 1)
+        idx_issued = _idx('issued_at', 2)
+        idx_expires = _idx('expires_at', 3)
+        idx_enabled = _idx('enabled', 5)
+        idx_cus = _idx('stripe_customer_id', 7)
+        if idx_cus < 0:
+            return None
+        # モック行をスキップして stripe_customer_id で検索。最新（後ろ）を優先
+        matched = None
+        for row in data[1:]:
+            while len(row) <= max(idx_key, idx_plan, idx_issued, idx_expires, idx_enabled, idx_cus):
+                row = row + ['']
+            if str(row[idx_key]).startswith('MOCK'):
+                continue
+            if str(row[idx_cus]).strip() == str(stripe_customer_id).strip():
+                matched = row
+        if not matched:
+            return None
+        return {
+            'license_key': str(matched[idx_key]).strip(),
+            'plan':        str(matched[idx_plan]).strip(),
+            'issued_at':   str(matched[idx_issued]).strip(),
+            'expires_at':  str(matched[idx_expires]).strip(),
+            'enabled':     str(matched[idx_enabled]).strip().upper() == 'TRUE',
+        }
+    except Exception:
+        return None
 
 def staging_show_bypass(container):
     """ログイン画面内のステージングバイパスUIを描画する。"""
@@ -1100,6 +1160,45 @@ def main():
             if st.button("プランを解約する"):
                 suc, msg = cancel_stripe_subscription_at_period_end(sub_id)
                 if suc: update_user_stripe_data(client, uid, subscription_id="", valid_until=datetime.now().strftime('%Y/%m/%d') if msg == "ALREADY_CANCELED" else msg); st.rerun()
+
+            # --- せどりツール契約中ならライセンス表示＆本体ダウンロードを提供 ---
+            if current_plan_id in SEDORI_PLAN_IDS:
+                st.divider()
+                st.markdown("### 🎫 せどりツール ライセンス & ダウンロード")
+                stripe_cus_id = str(user_row.get('stripe_customer_id', '')).strip()
+                lic = lookup_sedori_license(client, stripe_cus_id)
+                if not lic:
+                    st.warning(
+                        "ライセンス情報が見つかりません。決済直後の場合は数分後に自動発行されます。"
+                        "しばらく経っても表示されない場合は管理者(齋藤)までお問い合わせください。"
+                    )
+                else:
+                    lic_col1, lic_col2 = st.columns([2, 1])
+                    with lic_col1:
+                        st.markdown("**ライセンスキー**")
+                        st.code(lic['license_key'], language=None)
+                        st.caption(f"プラン: **{lic['plan']}** ｜ 発行: {lic['issued_at']} ｜ 有効期限: {lic['expires_at']}")
+                        if not lic['enabled']:
+                            st.error("⚠️ このライセンスは現在無効化されています。管理者にお問い合わせください。")
+                    with lic_col2:
+                        st.markdown("**本体ダウンロード**")
+                        os_choice = st.selectbox("OS", ["windows", "mac"], key="sedori_dl_os")
+                        if st.button("📥 ダウンロードURLを取得", key="sedori_dl_btn"):
+                            with st.spinner("確認中..."):
+                                try:
+                                    dl = get_sedori_download_url(lic['license_key'], os_choice)
+                                except Exception as e:
+                                    st.error(f"取得失敗: {e}")
+                                    dl = None
+                            if dl and dl.get("status") == "ok":
+                                st.success(f"✅ v{dl.get('version','')} ({dl.get('release_date','')})")
+                                st.link_button("⬇️ ダウンロード", dl['download_url'], type="primary")
+                            elif dl:
+                                st.warning(f"ダウンロード: {dl.get('message', '不明なエラー')}")
+                    st.caption(
+                        "💡 デスクトップツールを起動後、上記ライセンスキーを入力してログインしてください。"
+                        "PC が起動中でツール起動中のみ通知/自動値下げが動作します。"
+                    )
 
             # --- sedori クロスセル (既存契約中ユーザー向け) ---
             if ENABLE_SEDORI:
