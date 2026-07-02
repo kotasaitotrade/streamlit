@@ -111,6 +111,11 @@ PLAN_USER_LABEL = {
     "plan_basic7000": ("お手軽プラン", 7000),
     "plan_5000":  ("ライトプラン", 5000),
     "plan_7000":  ("ライトプラン + キーワード通知オプション", 7000),
+    # せどりツール（メルカリ/ヤフフリ）
+    "plan_sedori_pricedown_5000": ("メルカリ/ヤフフリ 自動値下げ", 5000),
+    "plan_sedori_arrival_5000":   ("メルカリ/ヤフフリ 新着通知", 5000),
+    "plan_all_full_6000":         ("せどりツール フルプラン", 6000),
+    "plan_all_full_20000":        ("せどりツール フルプラン", 20000),
 }
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 
@@ -1115,6 +1120,8 @@ def main():
                         st.caption(p["desc"])
                         st.metric("月額（追加分）", f"¥{p['price']:,}")
                         if st.button(f"このプランを追加", key=f"upsell_{key}"):
+                            # 決済成功ハンドラ(session_id)が読む temp settings に sedori プランを保存してから checkout
+                            update_user_temp_settings(client, uid, "all", p["plan_id"])
                             suc, url = create_stripe_checkout_session(uid, p["stripe_price_id"])
                             if suc:
                                 st.link_button("お支払い画面へ進む", url, type="primary")

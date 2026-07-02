@@ -43,6 +43,7 @@ SEDORI_PLAN_IDS = {
     "plan_sedori_pricedown_5000",
     "plan_sedori_arrival_5000",
     "plan_all_full_20000",
+    "plan_all_full_6000",  # モニター価格
 }
 USERS_SHEET_NAME = "ユーザー管理"
 MACHINES = ["machine_1", "machine_2"]
