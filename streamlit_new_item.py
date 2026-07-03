@@ -42,17 +42,10 @@ OPTION_PRICE = 2000
 PLANS = {
     "full": {
         "name": "プラン", "desc": "アパレル・その他の全てのカテゴリを選択可能", "type": "all",
-        "base_price": 9000,
-        "base_id": "price_1TZw2rRuq87ZH1shVVdNkhXn",
-        "opt_id": "price_1TZw26Ruq87ZH1shxQJwa4OA",
-        "base_plan_id": "plan_9000", "opt_plan_id": "plan_11000"
-    },
-    "basic": {
-        "name": "お手軽プラン", "desc": "アパレル・その他 全カテゴリ対応（キーワード通知オプションなし）", "type": "all",
-        "base_price": 7000,
-        "base_id": "price_1TZw3tRuq87ZH1shTbNIco8T",
-        "opt_id": None,
-        "base_plan_id": "plan_basic7000", "opt_plan_id": None
+        "base_price": 10000,
+        "base_id": "price_1Tdgw1Ruq87ZH1sh4qTM8XlI",
+        "opt_id": "price_1TdgvLRuq87ZH1sh6uoD4lCA",
+        "base_plan_id": "plan_10000", "opt_plan_id": "plan_12000"
     },
 }
 
@@ -108,7 +101,6 @@ PLAN_USER_LABEL = {
     "plan_12000": ("プラン + キーワード通知オプション", 12000),
     "plan_9000":  ("プラン", 9000),
     "plan_11000": ("プラン + キーワード通知オプション", 11000),
-    "plan_basic7000": ("お手軽プラン", 7000),
     "plan_5000":  ("ライトプラン", 5000),
     "plan_7000":  ("ライトプラン + キーワード通知オプション", 7000),
     # せどりツール（メルカリ/ヤフフリ）
@@ -607,10 +599,10 @@ def get_user_temp_settings(client, user_id):
         users_df = get_users_df(client)
         row = users_df[users_df['ユーザーID'] == str(user_id)]
         if not row.empty:
-            parts = str(row.iloc[0].get('temp_plan_settings', 'all,plan_9000')).split(',')
+            parts = str(row.iloc[0].get('temp_plan_settings', 'all,plan_10000')).split(',')
             if len(parts) >= 2: return parts[0], parts[1]
-        return 'all', 'plan_9000'
-    except: return 'all', 'plan_9000'
+        return 'all', 'plan_10000'
+    except: return 'all', 'plan_10000'
 
 def update_user_stripe_data(client, user_id, stripe_id=None, subscription_id=None, plan_id=None, restriction_type=None, valid_until=None):
     try:
@@ -936,7 +928,6 @@ def main():
 |---|---|
 | プラン | **¥{PLANS['full']['base_price']:,}/月** |
 | + キーワード通知オプション | **+¥{OPTION_PRICE:,}/月** |
-| お手軽プラン（キーワード通知なし） | **¥{PLANS['basic']['base_price']:,}/月** |
 
 ※ 登録は無料です。プラン契約はログイン後に「プラン契約・解約」メニューから行えます。
 ※ いつでも解約可能、契約期間終了日までサービスをご利用いただけます。
@@ -1244,18 +1235,10 @@ def main():
                                 st.error(f"Stripe 初期化エラー: {url}")
                 st.caption("💡 追加プランは現在のサブスクとは別契約になります。両方解約したい場合は順に解約してください。")
         else:
-            plan_key = st.radio(
-                "プラン選択",
-                ["full", "basic"],
-                format_func=lambda x: f"{PLANS[x]['name']} - ¥{PLANS[x]['base_price']:,}/月",
-            )
-            st.caption(PLANS[plan_key]['desc'])
+            plan_key = "full"
+            st.info(f"**プラン** ¥{PLANS[plan_key]['base_price']:,}/月")
             light_restriction = "all"
-            if PLANS[plan_key].get('opt_id'):
-                use_option = st.checkbox(f"✨ キーワード通知オプションを追加 (+¥{OPTION_PRICE:,})")
-            else:
-                use_option = False
-                st.caption("※ このプランはキーワード通知オプションの追加はできません。")
+            use_option = st.checkbox(f"✨ キーワード通知オプションを追加 (+¥{OPTION_PRICE:,})")
             target_price_id = PLANS[plan_key]['opt_id'] if use_option else PLANS[plan_key]['base_id']
             target_plan_str = PLANS[plan_key]['opt_plan_id'] if use_option else PLANS[plan_key]['base_plan_id']
 
