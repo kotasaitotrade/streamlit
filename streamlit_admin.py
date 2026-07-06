@@ -85,6 +85,7 @@ USER_COLS = [
     'failed_count', 'locked_until', 'temp_plan_settings', 'role', 'joined_at',
     'assigned_sales', 'force_pw_change', 'paid_months', 'read_announcements',
     'nojima_enabled', 'list_threshold',
+    'sedori_free_access',  # "1"=決済なしでせどりツール利用可の承認済ユーザー
 ]
 
 # ==========================================
@@ -1118,8 +1119,78 @@ def show_sedori_dashboard(client, users_df):
     except Exception as e:
         st.error(f"sedori スプシ参照エラー: {e}")
 
-    # --- 3. クロスセル運用ガイド ---
-    st.subheader("③ クロスセル運用のヒント")
+    # --- 3. 無料承認ユーザー管理 (決済なしでせどりツール利用可) ---
+    st.subheader("③ せどりツール 無料承認")
+    st.caption("プラン契約前でも承認したユーザーはツール利用可。承認時にライセンスを自動発行します。")
+    if users_df is None or users_df.empty:
+        st.info("ユーザーデータがありません。")
+    else:
+        # 現在の承認済ユーザー一覧
+        free_users = users_df[users_df.get('sedori_free_access', pd.Series([""] * len(users_df))).astype(str).str.strip() == '1'] if 'sedori_free_access' in users_df.columns else pd.DataFrame()
+        st.markdown(f"**現在の承認済ユーザー: {len(free_users)}人**")
+        if not free_users.empty:
+            disp_cols = [c for c in ["ユーザーID", "ユーザー名", "stripe_customer_id"] if c in free_users.columns]
+            st.dataframe(free_users[disp_cols], use_container_width=True, hide_index=True)
+
+        # ユーザー選択して承認
+        st.markdown("**新規承認 / 取消**")
+        target_pool = users_df[~users_df['role'].astype(str).isin(['admin', 'sales'])].copy() if 'role' in users_df.columns else users_df
+        opts = [(str(r.get('ユーザーID', '')), str(r.get('ユーザー名', '')), str(r.get('sedori_free_access', '')).strip() == '1')
+                for _, r in target_pool.iterrows()]
+        if opts:
+            labels = [f"{'✅' if approved else '⬜'} {name} ({uid})" for uid, name, approved in opts]
+            idx = st.selectbox("対象ユーザー", range(len(opts)), format_func=lambda i: labels[i], key="sedori_free_target")
+            selected_uid, selected_name, selected_approved = opts[idx]
+
+            col1, col2 = st.columns(2)
+            with col1:
+                lic_plan = st.selectbox("発行するライセンスプラン", ["AllFull", "Arrival", "Pricedown", "Pro", "Basic"], key="sedori_free_plan")
+            with col2:
+                lic_expires_days = st.number_input("有効期限(日)", min_value=30, max_value=730, value=365, step=30, key="sedori_free_days")
+
+            btn_col1, btn_col2 = st.columns(2)
+            with btn_col1:
+                if not selected_approved:
+                    if st.button("✅ 承認 + ライセンス発行", type="primary", key="sedori_free_approve_btn"):
+                        with st.spinner("承認・ライセンス発行中..."):
+                            # 1. 承認フラグを立てる
+                            ok1, msg1 = update_user_field(client, selected_uid, 'sedori_free_access', '1')
+                            # 2. 対象ユーザーの stripe_customer_id (無い場合は空でも OK)
+                            urow = users_df[users_df['ユーザーID'].astype(str) == selected_uid]
+                            cus_id = str(urow.iloc[0].get('stripe_customer_id', '')).strip() if not urow.empty else ''
+                            # 3. sedori スプシにライセンス発行
+                            import secrets as _secmod, string as _str
+                            suffix = ''.join(_secmod.choice(_str.ascii_uppercase + _str.digits) for _ in range(8))
+                            license_key = f"{lic_plan.upper()}-{datetime.now().year}-{suffix}"
+                            issued_at = datetime.now().strftime('%Y-%m-%d')
+                            expires_at = (datetime.now() + timedelta(days=int(lic_expires_days))).strftime('%Y-%m-%d')
+                            try:
+                                sh2 = client.open_by_key(SEDORI_SPREADSHEET_ID)
+                                lic_ws = sh2.worksheet('licenses')
+                                lic_ws.append_row([license_key, lic_plan, issued_at, expires_at, '', 'TRUE', f'無料承認 by admin ({selected_name})', cus_id or f"free_uid_{selected_uid}"])
+                                st.success(f"✅ 承認完了: {selected_name}")
+                                st.code(license_key)
+                                st.caption(f"プラン: {lic_plan} / 発行: {issued_at} / 有効期限: {expires_at}")
+                            except Exception as e:
+                                st.error(f"ライセンス発行エラー: {e}")
+                        if ok1:
+                            get_users_df.clear()
+                            st.rerun()
+                else:
+                    st.info("既に承認済みです")
+            with btn_col2:
+                if selected_approved:
+                    if st.button("⛔ 承認取消", key="sedori_free_revoke_btn"):
+                        ok, msg = update_user_field(client, selected_uid, 'sedori_free_access', '')
+                        if ok:
+                            get_users_df.clear()
+                            st.success("承認を取り消しました（既存ライセンスは自動で無効化しません）")
+                            st.rerun()
+                        else:
+                            st.error(f"取消失敗: {msg}")
+
+    # --- 4. クロスセル運用ガイド ---
+    st.subheader("④ クロスセル運用のヒント")
     st.markdown(
         "- EC契約者で sedori 未契約者には streamlit_new_item.py 側にバナーが表示されています\n"
         "- 月次ミーティングで「sedori 契約者数」が伸びていない場合は、ランディングや EC ユーザー向けメール campaign を検討\n"

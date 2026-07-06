@@ -125,7 +125,8 @@ USER_COLS = [
     'ユーザーID', 'ユーザー名', 'パスワードハッシュ', 'stripe_customer_id', 'subscription_id',
     'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine', 'secret_key',
     'failed_count', 'locked_until', 'temp_plan_settings', 'role', 'joined_at',
-    'assigned_sales', 'force_pw_change', 'paid_months', 'read_announcements'
+    'assigned_sales', 'force_pw_change', 'paid_months', 'read_announcements',
+    'sedori_free_access'  # "1"=決済なしでせどりツール利用可の承認済ユーザー
 ]
 
 # ==========================================
@@ -1155,6 +1156,48 @@ def main():
 
     elif menu == "プラン契約・解約":
         st.subheader("💳 サブスクリプション管理")
+
+        # 無料承認済ユーザーはプラン未契約でもせどりライセンス&DLセクションを表示
+        _sedori_free_ok_top = str(user_row.get('sedori_free_access', '')).strip() == '1'
+        if _sedori_free_ok_top and not has_active_sub:
+            st.info("🎁 **管理者から特別承認済み** — プラン契約なしでせどりツールをご利用いただけます。")
+            st.markdown("### 🎫 せどりツール ライセンス & ダウンロード")
+            stripe_cus_id = str(user_row.get('stripe_customer_id', '')).strip()
+            lic = lookup_sedori_license(client, stripe_cus_id) if stripe_cus_id else None
+            # 無料承認ユーザーは cus_id が無いことがある → free_uid_<user_id> で発行しているため fallback
+            if not lic:
+                lic = lookup_sedori_license(client, f"free_uid_{uid}")
+            if not lic:
+                st.warning("ライセンス情報が見つかりません。管理者にライセンス発行を依頼してください。")
+            else:
+                lic_col1, lic_col2 = st.columns([2, 1])
+                with lic_col1:
+                    st.markdown("**ライセンスキー**")
+                    st.code(lic['license_key'], language=None)
+                    st.caption(f"プラン: **{lic['plan']}** ｜ 発行: {lic['issued_at']} ｜ 有効期限: {lic['expires_at']}")
+                    if not lic['enabled']:
+                        st.error("⚠️ このライセンスは現在無効化されています。管理者にお問い合わせください。")
+                with lic_col2:
+                    st.markdown("**本体ダウンロード**")
+                    os_choice = st.selectbox("OS", ["windows", "mac"], key="sedori_dl_os_free")
+                    if st.button("📥 ダウンロードURLを取得", key="sedori_dl_btn_free"):
+                        with st.spinner("確認中..."):
+                            try:
+                                dl = get_sedori_download_url(lic['license_key'], os_choice)
+                            except Exception as e:
+                                st.error(f"取得失敗: {e}")
+                                dl = None
+                        if dl and dl.get("status") == "ok":
+                            st.success(f"✅ v{dl.get('version','')} ({dl.get('release_date','')})")
+                            st.link_button("⬇️ ダウンロード", dl['download_url'], type="primary")
+                        elif dl:
+                            st.warning(f"ダウンロード: {dl.get('message', '不明なエラー')}")
+                st.caption(
+                    "💡 デスクトップツールを起動後、上記ライセンスキーを入力してログインしてください。"
+                )
+            st.divider()
+            st.caption("👇 プランをご契約いただくと EC 新着通知もご利用いただけます。")
+
         if has_active_sub:
             # 現在のプラン情報を表示
             plan_label, plan_price = PLAN_USER_LABEL.get(current_plan_id, ("プラン", 0))
@@ -1168,8 +1211,9 @@ def main():
                 suc, msg = cancel_stripe_subscription_at_period_end(sub_id)
                 if suc: update_user_stripe_data(client, uid, subscription_id="", valid_until=datetime.now().strftime('%Y/%m/%d') if msg == "ALREADY_CANCELED" else msg); st.rerun()
 
-            # --- せどりツール契約中ならライセンス表示＆本体ダウンロードを提供 ---
-            if current_plan_id in SEDORI_PLAN_IDS:
+            # --- せどりツール契約中 or 無料承認済ならライセンス表示＆本体ダウンロードを提供 ---
+            _sedori_free_ok = str(user_row.get('sedori_free_access', '')).strip() == '1'
+            if current_plan_id in SEDORI_PLAN_IDS or _sedori_free_ok:
                 st.divider()
                 st.markdown("### 🎫 せどりツール ライセンス & ダウンロード")
                 stripe_cus_id = str(user_row.get('stripe_customer_id', '')).strip()
