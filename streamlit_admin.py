@@ -1146,7 +1146,13 @@ def show_sedori_dashboard(client, users_df):
             with col1:
                 lic_plan = st.selectbox("発行するライセンスプラン", ["AllFull", "Arrival", "Pricedown", "Pro", "Basic"], key="sedori_free_plan")
             with col2:
-                lic_expires_days = st.number_input("有効期限(日)", min_value=30, max_value=730, value=365, step=30, key="sedori_free_days")
+                lic_expires_days = st.radio(
+                    "有効期限",
+                    options=[365, 183],
+                    format_func=lambda d: f"{d}日 ({'約1年' if d == 365 else '約半年'})",
+                    key="sedori_free_days",
+                    horizontal=True,
+                )
 
             btn_col1, btn_col2 = st.columns(2)
             with btn_col1:
