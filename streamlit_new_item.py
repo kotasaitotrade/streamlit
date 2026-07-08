@@ -210,15 +210,40 @@ def create_discord_channel_and_webhook(user_discord_id, user_name):
     if res_wh.status_code not in [200, 201]: return False, f"Webhook失敗: {res_wh.text}"
     return True, res_wh.json()["url"]
 
-def create_stripe_checkout_session(user_id, price_id):
+def create_stripe_checkout_session(user_id, price_id, trial_period_days=None):
+    """Stripe Checkout セッションを作成する。
+    trial_period_days > 0 の場合は無料トライアル期間を付与する（Stripe subscription_data.trial_period_days）。
+    トライアル中はカードが登録された状態で課金は保留、期間終了時に自動で初回課金される。
+    """
     try:
-        session = stripe.checkout.Session.create(
-            payment_method_types=['card'], line_items=[{'price': price_id, 'quantity': 1}],
-            mode='subscription', success_url=APP_BASE_URL + '?session_id={CHECKOUT_SESSION_ID}',
-            cancel_url=APP_BASE_URL, client_reference_id=str(user_id), metadata={'user_id': str(user_id)},
+        params = dict(
+            payment_method_types=['card'],
+            line_items=[{'price': price_id, 'quantity': 1}],
+            mode='subscription',
+            success_url=APP_BASE_URL + '?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url=APP_BASE_URL,
+            client_reference_id=str(user_id),
+            metadata={'user_id': str(user_id)},
         )
+        if trial_period_days and int(trial_period_days) > 0:
+            params['subscription_data'] = {'trial_period_days': int(trial_period_days)}
+        session = stripe.checkout.Session.create(**params)
         return True, session.url
     except Exception as e: return False, str(e)
+
+
+# EC 新着通知ツールの無料トライアル日数（0で無効化）
+EC_TRIAL_DAYS = 7
+
+def is_trial_eligible(user_row):
+    """初回契約者のみトライアル対象。
+    stripe_customer_id が未設定なら過去に一度もStripe決済していないので eligible。
+    (既存顧客はトライアル対象外にすることでabuse防止)
+    """
+    if user_row is None:
+        return True
+    cus_id = str(user_row.get('stripe_customer_id', '')).strip().lower()
+    return cus_id in ('', 'nan', 'none')
 
 def get_stripe_session_details(session_id):
     try: return stripe.checkout.Session.retrieve(session_id)
@@ -922,8 +947,9 @@ def main():
                 else: st.error(msg)
             staging_show_bypass(st)
         with tab2:
+            _trial_banner = f"\n\n🎁 **初回契約者は {EC_TRIAL_DAYS}日間 無料トライアル付き**（期間中いつでも解約無料）" if EC_TRIAL_DAYS > 0 else ""
             st.markdown(f"""
-**💴 料金プラン**
+**💴 料金プラン**{_trial_banner}
 
 | プラン | 月額 |
 |---|---|
@@ -1311,10 +1337,20 @@ def main():
 
 </div>
 """, unsafe_allow_html=True)
+            # 初回契約者には無料トライアルバナー表示
+            trial_eligible = is_trial_eligible(user_row) and EC_TRIAL_DAYS > 0
+            if trial_eligible:
+                st.success(
+                    f"🎁 **今なら {EC_TRIAL_DAYS}日間の無料トライアル付き！**\n\n"
+                    f"お支払い画面でカード登録が必要ですが、トライアル期間中は課金されません。"
+                    f"期間内にいつでも解約可能です（解約手続き：メニュー「プラン契約・解約」から）。"
+                )
+
             agree = st.checkbox("上記の利用規約を読み、同意します")
             if st.button("お支払い画面へ進む", disabled=not agree):
                 update_user_temp_settings(client, uid, light_restriction, target_plan_str)
-                suc, url = create_stripe_checkout_session(uid, target_price_id)
+                trial_days = EC_TRIAL_DAYS if trial_eligible else None
+                suc, url = create_stripe_checkout_session(uid, target_price_id, trial_period_days=trial_days)
                 if suc: st.link_button("支払いを完了させる", url, type="primary")
 
     elif menu.startswith("お知らせ"):
