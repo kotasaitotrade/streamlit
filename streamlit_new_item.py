@@ -126,7 +126,9 @@ USER_COLS = [
     'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine', 'secret_key',
     'failed_count', 'locked_until', 'temp_plan_settings', 'role', 'joined_at',
     'assigned_sales', 'force_pw_change', 'paid_months', 'read_announcements',
-    'sedori_free_access'  # "1"=決済なしでせどりツール利用可の承認済ユーザー
+    'sedori_plan_id',          # せどりツールのプランID（通知サービスのplan_idと分離）
+    'sedori_subscription_id',  # せどりツールのStripeサブスクリプションID
+    'sedori_free_access',  # "1"=決済なしでせどりツール利用可の承認済ユーザー
 ]
 
 # ==========================================
@@ -855,8 +857,11 @@ def render_hidden_arrival_page(client, uid, user_row):
         "4. ツールを起動 → PC が動いている間、新着を Discord に通知"
     )
 
-    cur_plan = str(user_row.get("plan_id", ""))
-    sub_id = str(user_row.get("subscription_id", ""))
+    # sedori専用列を優先、なければplan_idで代替（旧データ互換）
+    _sp = str(user_row.get("sedori_plan_id", "")).strip()
+    _ss = str(user_row.get("sedori_subscription_id", "")).strip()
+    cur_plan = _sp if _sp and _sp not in ("nan", "none") else str(user_row.get("plan_id", ""))
+    sub_id = _ss if _ss and _ss not in ("nan", "none") else str(user_row.get("subscription_id", ""))
     has_sub = sub_id.strip().lower() not in ("", "nan", "none")
     if cur_plan == plan["plan_id"] and has_sub:
         st.success("✅ 既にこのライセンスをご利用中です。デスクトップツールからご利用いただけます。")
@@ -897,7 +902,14 @@ def main():
             target_uid = metadata.get('user_id') if isinstance(metadata, dict) else getattr(metadata, 'user_id', None)
             if target_uid:
                 saved_restriction, saved_plan_id = get_user_temp_settings(client, target_uid)
-                update_user_stripe_data(client, target_uid, stripe_id=session.customer, subscription_id=session.subscription, plan_id=saved_plan_id, restriction_type=saved_restriction, valid_until="")
+                if saved_plan_id in SEDORI_PLAN_IDS:
+                    # せどりツール購入 → sedori専用列に書く（通知サービスのplan_id/subscription_idを上書きしない）
+                    update_user_stripe_data(client, target_uid, stripe_id=session.customer, valid_until="")
+                    _update_user_field(client, target_uid, 'sedori_plan_id', saved_plan_id)
+                    _update_user_field(client, target_uid, 'sedori_subscription_id', session.subscription)
+                else:
+                    # 通知サービス購入 → 従来通りplan_id/subscription_idに書く
+                    update_user_stripe_data(client, target_uid, stripe_id=session.customer, subscription_id=session.subscription, plan_id=saved_plan_id, restriction_type=saved_restriction, valid_until="")
                 add_initial_notification_settings(client, target_uid, saved_restriction)
                 st.success("🎉 お支払いが完了しました！"); time.sleep(3); st.query_params.clear()
                 st.session_state['logged_in_user_id'] = target_uid
@@ -1005,6 +1017,11 @@ def main():
     sub_id = str(user_row.get('subscription_id', ''))
     current_plan_id = str(user_row.get('plan_id', ''))
     restriction_type = str(user_row.get('plan', 'all'))
+    # せどりプランは専用列から取得（旧データは plan_id で代替）
+    _sedori_plan_col = str(user_row.get('sedori_plan_id', '')).strip()
+    _sedori_sub_col  = str(user_row.get('sedori_subscription_id', '')).strip()
+    sedori_plan_id   = _sedori_plan_col if _sedori_plan_col and _sedori_plan_col not in ('nan', 'none', '') else (current_plan_id if current_plan_id in SEDORI_PLAN_IDS else '')
+    sedori_sub_id    = _sedori_sub_col  if _sedori_sub_col  and _sedori_sub_col  not in ('nan', 'none', '') else (sub_id if current_plan_id in SEDORI_PLAN_IDS else '')
     
     valid_until_str = str(user_row.get('valid_until', ''))
     is_period_active = False
@@ -1239,7 +1256,7 @@ def main():
 
             # --- せどりツール契約中 or 無料承認済ならライセンス表示＆本体ダウンロードを提供 ---
             _sedori_free_ok = str(user_row.get('sedori_free_access', '')).strip() == '1'
-            if current_plan_id in SEDORI_PLAN_IDS or _sedori_free_ok:
+            if sedori_plan_id in SEDORI_PLAN_IDS or _sedori_free_ok:
                 st.divider()
                 st.markdown("### 🎫 せどりツール ライセンス & ダウンロード")
                 stripe_cus_id = str(user_row.get('stripe_customer_id', '')).strip()
@@ -1291,11 +1308,14 @@ def main():
                 up_col1, up_col2, up_col3 = st.columns(3)
                 for col, key in zip([up_col1, up_col2, up_col3], ["pricedown", "arrival", "all_full"]):
                     p = SEDORI_PLANS[key]
+                    already = sedori_plan_id == p["plan_id"]
                     with col:
                         st.markdown(f"**{p['name']}**")
                         st.caption(p["desc"])
                         st.metric("月額（追加分）", f"¥{p['price']:,}")
-                        if st.button(f"このプランを追加", key=f"upsell_{key}"):
+                        if already:
+                            st.success("✅ 契約中")
+                        elif st.button(f"このプランを追加", key=f"upsell_{key}"):
                             # 決済成功ハンドラ(session_id)が読む temp settings に sedori プランを保存してから checkout
                             update_user_temp_settings(client, uid, "all", p["plan_id"])
                             suc, url = create_stripe_checkout_session(uid, p["stripe_price_id"])

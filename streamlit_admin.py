@@ -84,6 +84,8 @@ USER_COLS = [
     'plan_id', 'チャンネルURL', 'plan', 'valid_until', 'assigned_machine', 'secret_key',
     'failed_count', 'locked_until', 'temp_plan_settings', 'role', 'joined_at',
     'assigned_sales', 'force_pw_change', 'paid_months', 'read_announcements',
+    'sedori_plan_id',          # せどりツールのプランID（通知サービスのplan_idと分離）
+    'sedori_subscription_id',  # せどりツールのStripeサブスクリプションID
     'nojima_enabled', 'list_threshold',
     'sedori_free_access',  # "1"=決済なしでせどりツール利用可の承認済ユーザー
 ]
@@ -1076,22 +1078,27 @@ def show_sedori_dashboard(client, users_df):
     if users_df is None or users_df.empty:
         st.info("ユーザーデータがありません。")
     else:
-        plan_col = "plan_id" if "plan_id" in users_df.columns else None
-        if plan_col is None:
-            st.warning("plan_id 列が見当たりません。")
+        # sedori_plan_id列を優先、なければplan_idの中のSEDORI_PLAN_IDSで代替
+        if "sedori_plan_id" in users_df.columns:
+            sedori_mask = users_df["sedori_plan_id"].astype(str).isin(SEDORI_PLAN_IDS) | (
+                (users_df["sedori_plan_id"].astype(str).str.strip().isin(["", "nan", "None"])) &
+                users_df["plan_id"].astype(str).isin(SEDORI_PLAN_IDS)
+            )
         else:
-            sedori_users = users_df[users_df[plan_col].astype(str).isin(SEDORI_PLAN_IDS)]
-            ec_users = users_df[users_df[plan_col].astype(str).str.startswith("plan_") & ~users_df[plan_col].astype(str).isin(SEDORI_PLAN_IDS)]
-            c1, c2, c3 = st.columns(3)
-            c1.metric("EC契約者数", len(ec_users))
-            c2.metric("sedori 契約者数", len(sedori_users))
-            ratio = (len(sedori_users) / max(1, len(ec_users))) * 100
-            c3.metric("クロスセル率", f"{ratio:.1f}%")
+            sedori_mask = users_df["plan_id"].astype(str).isin(SEDORI_PLAN_IDS)
+        sedori_users = users_df[sedori_mask]
+        ec_mask = users_df["plan_id"].astype(str).str.startswith("plan_") & ~users_df["plan_id"].astype(str).isin(SEDORI_PLAN_IDS)
+        ec_users = users_df[ec_mask]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("EC契約者数", len(ec_users))
+        c2.metric("sedori 契約者数", len(sedori_users))
+        ratio = (len(sedori_users) / max(1, len(ec_users))) * 100
+        c3.metric("クロスセル率", f"{ratio:.1f}%")
 
-            if len(sedori_users) > 0:
-                st.markdown("**sedori 契約中ユーザー一覧**")
-                disp_cols = [c for c in ["ユーザーID", "ユーザー名", plan_col, "joined_at", "valid_until"] if c in sedori_users.columns]
-                st.dataframe(sedori_users[disp_cols], use_container_width=True, hide_index=True)
+        if len(sedori_users) > 0:
+            st.markdown("**sedori 契約中ユーザー一覧**")
+            disp_cols = [c for c in ["ユーザーID", "ユーザー名", "sedori_plan_id", "plan_id", "joined_at", "valid_until"] if c in sedori_users.columns]
+            st.dataframe(sedori_users[disp_cols], use_container_width=True, hide_index=True)
 
     # --- 2. sedori 専用 GAS スプシのライセンス情報 ---
     st.subheader("② sedori ライセンス (専用GAS スプシ)")
