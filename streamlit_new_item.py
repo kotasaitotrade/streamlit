@@ -129,6 +129,7 @@ USER_COLS = [
     'sedori_plan_id',          # せどりツールのプランID（通知サービスのplan_idと分離）
     'sedori_subscription_id',  # せどりツールのStripeサブスクリプションID
     'sedori_free_access',  # "1"=決済なしでせどりツール利用可の承認済ユーザー
+    'notify_trial_used',   # "1"=通知サービスの無料トライアルを使用済み（stripe_customer_idとは別管理）
 ]
 
 # ==========================================
@@ -238,14 +239,18 @@ def create_stripe_checkout_session(user_id, price_id, trial_period_days=None):
 EC_TRIAL_DAYS = 7
 
 def is_trial_eligible(user_row):
-    """初回契約者のみトライアル対象。
-    stripe_customer_id が未設定なら過去に一度もStripe決済していないので eligible。
+    """通知サービスへの初回契約者のみトライアル対象。
+    専用フラグ notify_trial_used が立っていなければ eligible。
     (既存顧客はトライアル対象外にすることでabuse防止)
+
+    stripe_customer_id では判定しない: この列はせどりツールupsell購入等
+    別商品の決済でも書き込まれるため、それらを先に購入した顧客が
+    通知サービス本来のトライアルを受け取れなくなる不具合があった。
     """
     if user_row is None:
         return True
-    cus_id = str(user_row.get('stripe_customer_id', '')).strip().lower()
-    return cus_id in ('', 'nan', 'none')
+    used = str(user_row.get('notify_trial_used', '')).strip().lower()
+    return used not in ('1', 'true', 'yes')
 
 def get_stripe_session_details(session_id):
     try: return stripe.checkout.Session.retrieve(session_id)
@@ -259,6 +264,38 @@ def cancel_stripe_subscription_at_period_end(subscription_id):
     except Exception as e:
         if "No such subscription" in str(e): return True, "ALREADY_CANCELED"
         return False, str(e)
+
+def reconcile_stripe_subscription_status(client, user_id, subscription_id):
+    """アプリの「プランを解約する」ボタンを経由しない解約を拾うためのフォールバック。
+
+    Stripeカスタマーポータル解約・カード決済失敗による自動解約・
+    管理者がStripeダッシュボードから直接解約した場合など、
+    アプリを経由しない解約はシートの subscription_id が「あり」のまま残ってしまい、
+    通知・アクセス権限が解約後も止まらない不具合の原因になっていた。
+    ログイン時に一度だけ実際のStripe側の状態を確認し、
+    解約・失敗済みであればシートを追従させる（valid_untilを設定しsubscription_idを空にする）。
+    """
+    if not subscription_id or subscription_id.strip().lower() in ('', 'nan', 'none'):
+        return None
+    try:
+        sub = stripe.Subscription.retrieve(subscription_id)
+    except Exception as e:
+        if "No such subscription" in str(e):
+            # Stripe側に存在しない = 解約済み。期限が分からないので即時終了扱い。
+            valid_until = datetime.now(timezone(timedelta(hours=9))).strftime('%Y/%m/%d')
+            update_user_stripe_data(client, user_id, subscription_id="", valid_until=valid_until)
+            return valid_until
+        return None  # ネットワークエラー等は判断材料不足のため何もしない（誤停止防止）
+
+    if sub['status'] in ('canceled', 'incomplete_expired', 'unpaid'):
+        end_ts = sub.get('canceled_at') or sub.get('current_period_end')
+        if end_ts:
+            valid_until = datetime.fromtimestamp(end_ts).strftime('%Y/%m/%d')
+        else:
+            valid_until = datetime.now(timezone(timedelta(hours=9))).strftime('%Y/%m/%d')
+        update_user_stripe_data(client, user_id, subscription_id="", valid_until=valid_until)
+        return valid_until
+    return None
 
 def change_stripe_subscription_plan(subscription_id, new_price_id):
     try:
@@ -897,7 +934,10 @@ def main():
 
     if "session_id" in st.query_params:
         session = get_stripe_session_details(st.query_params["session_id"])
-        if session and session.payment_status == 'paid':
+        # トライアル付き(¥0)チェックアウトは 'paid' ではなく 'no_payment_required' になる。
+        # 'paid' のみを見ていると、トライアルが正しく付与された契約ほど
+        # 決済完了処理(subscription_id等の書き込み)が一切走らなくなってしまう。
+        if session and session.payment_status in ('paid', 'no_payment_required'):
             metadata = getattr(session, 'metadata', None) or {}
             target_uid = metadata.get('user_id') if isinstance(metadata, dict) else getattr(metadata, 'user_id', None)
             if target_uid:
@@ -910,6 +950,8 @@ def main():
                 else:
                     # 通知サービス購入 → 従来通りplan_id/subscription_idに書く
                     update_user_stripe_data(client, target_uid, stripe_id=session.customer, subscription_id=session.subscription, plan_id=saved_plan_id, restriction_type=saved_restriction, valid_until="")
+                    # 通知サービスへの契約が一度成立したら、以後は再度トライアル対象にしない
+                    _update_user_field(client, target_uid, 'notify_trial_used', '1')
                 add_initial_notification_settings(client, target_uid, saved_restriction)
                 st.success("🎉 お支払いが完了しました！"); time.sleep(3); st.query_params.clear()
                 st.session_state['logged_in_user_id'] = target_uid
@@ -1015,6 +1057,19 @@ def main():
         st.stop()
 
     sub_id = str(user_row.get('subscription_id', ''))
+
+    # Stripe側で(ポータル解約/決済失敗/管理者操作等)アプリを経由せず解約された場合の追従。
+    # ログインセッションにつき1回だけ確認する(毎rerunでStripe APIを叩かないため)。
+    _reconcile_key = f"_stripe_reconciled_{uid}"
+    if sub_id and not st.session_state.get(_reconcile_key):
+        st.session_state[_reconcile_key] = True
+        new_valid_until = reconcile_stripe_subscription_status(client, uid, sub_id)
+        if new_valid_until is not None:
+            sub_id = ""
+            user_row = user_row.copy()
+            user_row['subscription_id'] = ""
+            user_row['valid_until'] = new_valid_until
+
     current_plan_id = str(user_row.get('plan_id', ''))
     restriction_type = str(user_row.get('plan', 'all'))
     # せどりプランは専用列から取得（旧データは plan_id で代替）

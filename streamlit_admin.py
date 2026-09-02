@@ -88,6 +88,7 @@ USER_COLS = [
     'sedori_subscription_id',  # せどりツールのStripeサブスクリプションID
     'nojima_enabled', 'list_threshold',
     'sedori_free_access',  # "1"=決済なしでせどりツール利用可の承認済ユーザー
+    'notify_trial_used',   # "1"=通知サービスの無料トライアルを使用済み（stripe_customer_idとは別管理）
 ]
 
 # ==========================================
@@ -253,6 +254,39 @@ def cancel_stripe_subscription_at_period_end(subscription_id):
         if "No such subscription" in str(e): return True, "ALREADY_CANCELED"
         return False, str(e)
 
+def reconcile_stripe_subscription_status(client, user_id, subscription_id):
+    """Stripe側の実際の契約状態をシートに反映する（管理画面からの手動実行版）。
+
+    アプリの「プランを解約する」ボタンを経由しない解約
+    (Stripeカスタマーポータル解約・カード決済失敗による自動解約・
+    管理者がStripeダッシュボードから直接解約した場合等)は、
+    シートの subscription_id が「あり」のまま残ってしまい、
+    通知・アクセス権限が解約後も止まらない不具合の原因になっていた。
+    ここでStripeへ実際の状態を問い合わせ、解約・失敗済みなら
+    シートを追従させる(valid_untilを設定しsubscription_idを空にする)。
+    戻り値: (更新したか, メッセージ)
+    """
+    if not subscription_id or subscription_id.strip().lower() in ('', 'nan', 'none'):
+        return False, "サブスクリプションIDが未設定です"
+    try:
+        sub = stripe.Subscription.retrieve(subscription_id)
+    except Exception as e:
+        if "No such subscription" in str(e):
+            valid_until = datetime.now(timezone(timedelta(hours=9))).strftime('%Y/%m/%d')
+            update_user_field(client, user_id, 'subscription_id', "")
+            update_user_field(client, user_id, 'valid_until', valid_until)
+            return True, f"Stripe上に存在しません(解約済扱い) → 有効期限を{valid_until}に設定しました"
+        return False, f"Stripe確認エラー: {e}"
+
+    if sub['status'] in ('canceled', 'incomplete_expired', 'unpaid'):
+        end_ts = sub.get('canceled_at') or sub.get('current_period_end')
+        valid_until = datetime.fromtimestamp(end_ts).strftime('%Y/%m/%d') if end_ts \
+            else datetime.now(timezone(timedelta(hours=9))).strftime('%Y/%m/%d')
+        update_user_field(client, user_id, 'subscription_id', "")
+        update_user_field(client, user_id, 'valid_until', valid_until)
+        return True, f"Stripe状態: {sub['status']} → 有効期限を{valid_until}に設定しました"
+    return False, f"Stripe上は現在も有効です(status: {sub['status']})"
+
 def change_stripe_subscription_plan(subscription_id, new_price_id):
     try:
         sub = stripe.Subscription.retrieve(subscription_id)
@@ -311,7 +345,7 @@ def get_monthly_fee_data(users_df, year, month):
     result = []
     for _, row in users_df.iterrows():
         role = str(row.get('role', 'user')).strip()
-        if role in ['admin', 'sales']:
+        if role in ['admin', 'sales', 'disabled']:
             continue
         joined_str = str(row.get('joined_at', '')).strip()
         plan_id = str(row.get('plan_id', '')).strip()
@@ -460,6 +494,14 @@ def show_user_management(client, users_df):
                             ok, msg = admin_disable_user(client, uid, sub_id)
                             if ok: st.success("無効化しました（Stripeは期間末解約）"); st.rerun()
                             else: st.error(msg)
+                    # Stripe側の実際の契約状態と同期（ポータル解約・決済失敗など、
+                    # アプリの解約ボタンを経由しない解約を拾うための手動トリガー）
+                    if sub_id and sub_id not in ["", "nan", "None"]:
+                        if st.button("🔄 Stripeと同期", key=f"sync_stripe_{uid}",
+                                     help="ユーザーがアプリ以外(Stripeポータル・カード決済失敗等)で解約した場合に、実際の契約状態を確認してシートに反映します"):
+                            updated, msg = reconcile_stripe_subscription_status(client, uid, sub_id)
+                            if updated: st.success(msg); st.rerun()
+                            else: st.info(msg)
 
                 with col_b:
                     st.write("**マシン変更**")
